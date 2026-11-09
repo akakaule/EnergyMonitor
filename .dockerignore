@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/dev-dist/
+src/EnergyMonitor.Web/wwwroot/
+.git/
+.github/
+.vs/
+infra/
+tests/
+*.md

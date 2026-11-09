@@ -1,0 +1,54 @@
+name: Deploy
+
+# Manual only. Requires, per GitHub environment (dev / prod):
+#   variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP
+#   a federated credential on that app registration for this repository and environment (no stored secret)
+# and filled-in infra/<environment>.bicepparam. See README, "Deployment".
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/energy-monitor
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image name in lower case
+        run: echo "IMAGE=${IMAGE,,}" >> "$GITHUB_ENV"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        run: |
+          docker build -t "$IMAGE:${{ github.sha }}" .
+          docker push "$IMAGE:${{ github.sha }}"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy infrastructure and app
+        run: |
+          az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file infra/main.bicep \
+            --parameters "infra/${{ inputs.environment }}.bicepparam" \
+            --parameters containerImage="$IMAGE:${{ github.sha }}" \
+                         registryServer=ghcr.io \
+                         registryUsername="${{ github.actor }}" \
+                         registryPassword="${{ secrets.GHCR_PULL_TOKEN }}"

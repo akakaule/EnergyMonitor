@@ -59,12 +59,15 @@ public static class ReportComposer
             sb.Append(StatusLabel(s.Status)).AppendLine(".");
         }
 
-        foreach (var s in summaries.Where(s => s.PendingDays.Count > 0))
+        // Properties waiting for the same days share one line.
+        foreach (var group in summaries.Where(s => s.PendingDays.Count > 0)
+            .GroupBy(s => (First: s.PendingDays[0], Last: s.PendingDays[^1])))
         {
-            var days = s.PendingDays.Count == 1
-                ? Da.ShortDate(s.PendingDays[0])
-                : $"{Da.ShortDate(s.PendingDays[0])}–{Da.ShortDate(s.PendingDays[^1])}";
-            sb.Append("Bemærk: Data for ").Append(days).Append(" er endnu ikke komplette (").Append(s.Property.Name).AppendLine(").");
+            var days = group.Key.First == group.Key.Last
+                ? Da.ShortDate(group.Key.First)
+                : $"{Da.ShortDate(group.Key.First)}–{Da.ShortDate(group.Key.Last)}";
+            sb.Append("Bemærk: Data for ").Append(days).Append(" er endnu ikke komplette (")
+                .AppendJoin(", ", group.Select(s => s.Property.Name)).AppendLine(").");
         }
 
         foreach (var e in systemEvents.Where(e => e.State == AlertState.Open))
@@ -75,7 +78,8 @@ public static class ReportComposer
         sb.Append("Seneste vellykkede datakontakt: ")
             .Append(lastSuccessfulSyncLocal is { } t ? $"{Da.ShortDate(DateOnly.FromDateTime(t.DateTime))} kl. {Da.Time(t)}" : "ingen endnu")
             .Append('.');
-        return sb.ToString();
+        // One line-ending style whatever the host OS: the text goes to a chat client.
+        return sb.ToString().ReplaceLineEndings("\n");
     }
 
     public static string AlertMessage(string propertyName, AlertEvent e)
