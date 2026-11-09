@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+*.user
+TestResults/
+node_modules/
+dist/
+dev-dist/
+src/EnergyMonitor.Web/wwwroot/
+__azurite*
+__blobstorage__/
+__queuestorage__/
+*.local

@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EnergyMonitor.AppHost/EnergyMonitor.AppHost.csproj" />
+    <Project Path="src/EnergyMonitor.Core/EnergyMonitor.Core.csproj" />
+    <Project Path="src/EnergyMonitor.ServiceDefaults/EnergyMonitor.ServiceDefaults.csproj" />
+    <Project Path="src/EnergyMonitor.Web/EnergyMonitor.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EnergyMonitor.FakeUpstreams/EnergyMonitor.FakeUpstreams.csproj" />
+    <Project Path="tests/EnergyMonitor.Tests/EnergyMonitor.Tests.csproj" />
+  </Folder>
+</Solution>
