@@ -87,7 +87,7 @@ For frontend work, `npm run dev` in `src/frontend` proxies `/api` to the running
 ```sh
 docker run -d --rm -p 10002:10002 mcr.microsoft.com/azure-storage/azurite \
   azurite-table --tableHost 0.0.0.0 --inMemoryPersistence --skipApiVersionCheck
-dotnet test --project tests/EnergyMonitor.Tests     # 170 tests; the 10 Table Storage ones are skipped without Azurite
+dotnet test --project tests/EnergyMonitor.Tests     # 177 tests; the 10 Table Storage ones are skipped without Azurite
 cd src/frontend && npm run lint && npm test         # ESLint and 14 component/format tests
 ```
 
@@ -101,7 +101,7 @@ The pipeline tests run the real application in-process with a controllable clock
 | `Telegram:BotToken` | Bot token from BotFather | Key Vault secret `Telegram--BotToken` |
 | `Auth:ClientSecret` | Client secret of the sign-in app registration | Key Vault secret `Auth--ClientSecret` |
 | `Auth:Authority`, `Auth:ClientId` | OIDC provider (Entra ID or any standard OIDC) | Bicep parameters |
-| `Auth:Users:n:Subject` / `:Role` | Allowlist. Subject is the user's object id (`oid`, preferred), `sub`, or sign-in name. Role is `admin` or `viewer` | Bicep parameter `users` |
+| `Auth:Users:n:Subject` / `:Role` | Allowlist. Subject is an e-mail address the provider reports as verified (Google), or the user's `sub`, object id (`oid`) or sign-in name (Entra ID). Role is `admin` or `viewer` | Bicep parameter `users` |
 | `Telegram:ChatIds` | Default recipients until they are changed in Indstillinger | Bicep parameter |
 | `Schedule:SyncTimes`, `Schedule:ReportTime` | Danish local times, default `08:00`, `17:00` and `09:00` | App settings |
 | `Sync:BackfillDays`, `Sync:RefetchDays` | Default 90 and 7 | App settings |
@@ -142,7 +142,9 @@ Evaluated only on complete Danish calendar days. Defaults are starting values fo
 
 A `dev` environment was deployed from a workstation on 10 November 2026 using the Azure Container Registry variant described under *Deploying from a workstation* below. The **Deploy** workflow (GHCR) has not been run.
 
-1. **Sign-in app registration** (Entra ID): single tenant, web platform. The redirect URI is the `redirectUri` output of the deployment (`https://<app>/signin-oidc`). Create a client secret.
+1. **Sign-in client.** Any standard OIDC provider works; the app uses the authorization code flow with PKCE and a server-side cookie.
+   - **Google**: in the [Google Cloud console](https://console.cloud.google.com/apis/credentials) configure the OAuth consent screen (External; add yourself as a test user or publish it), then *Create credentials → OAuth client ID → Web application* with the authorised redirect URI `https://<app>/signin-oidc` (the `redirectUri` output of the deployment). Use `authAuthority = 'https://accounts.google.com'` and the client id; the allowlist subject is the Google account's e-mail address. Anyone with a Google account can reach the sign-in page, but only allowlisted, verified addresses get past it.
+   - **Entra ID**: a single-tenant app registration with the web redirect URI above and a client secret. Use `authAuthority = 'https://login.microsoftonline.com/<tenant-id>/v2.0'`; the allowlist subject is the user's object id.
 2. **Resource group**: `az group create -n rg-energymonitor-dev -l westeurope`.
 3. **Parameters**: fill in `infra/dev.bicepparam` (tenant, client id, users). None of it is secret.
 4. **GitHub**: for each environment (`dev`, `prod`) set the variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` for a deployment identity with a federated credential for this repository, and a secret `GHCR_PULL_TOKEN` (a token with `read:packages`). Run the **Deploy** workflow. It builds the image, pushes it to GHCR and deploys `infra/main.bicep`.

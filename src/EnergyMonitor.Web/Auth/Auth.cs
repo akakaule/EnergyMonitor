@@ -17,7 +17,7 @@ public sealed class AuthOptions
     /// <summary><c>Oidc</c> (default) or <c>Development</c>. Development is refused outside the Development environment.</summary>
     public string Mode { get; set; } = ModeOidc;
 
-    /// <summary>OIDC authority, e.g. https://login.microsoftonline.com/{tenant}/v2.0.</summary>
+    /// <summary>OIDC authority, e.g. https://accounts.google.com or https://login.microsoftonline.com/{tenant}/v2.0.</summary>
     public string? Authority { get; set; }
 
     public string? ClientId { get; set; }
@@ -33,7 +33,10 @@ public sealed class AuthOptions
 
 public sealed class AllowedUser
 {
-    /// <summary>The user's object id (<c>oid</c>), <c>sub</c>, or sign-in name (<c>preferred_username</c>).</summary>
+    /// <summary>
+    /// The user's object id (<c>oid</c>), <c>sub</c>, sign-in name (<c>preferred_username</c>), or an e-mail
+    /// address the provider reports as verified.
+    /// </summary>
     public string Subject { get; set; } = "";
 
     public string Role { get; set; } = UserRoles.Viewer;
@@ -45,7 +48,6 @@ public sealed class AllowedUser
 /// </summary>
 public sealed class Allowlist(IOptionsMonitor<AuthOptions> options)
 {
-    // The e-mail claim is deliberately not used: it is not a verified identifier in every tenant.
     private static readonly string[] SubjectClaims = ["oid", "sub", "preferred_username"];
 
     public User? Resolve(ClaimsPrincipal principal)
@@ -59,6 +61,15 @@ public sealed class Allowlist(IOptionsMonitor<AuthOptions> options)
             .Where(c => SubjectClaims.Contains(c.Type) && !string.IsNullOrWhiteSpace(c.Value))
             .Select(c => c.Value)
             .ToList();
+
+        // An e-mail address counts only when the provider states it is verified (Google does for its own
+        // accounts). Providers that let users or admins set an unverified address never match by e-mail.
+        if (principal.FindFirst("email")?.Value is { Length: > 0 } email
+            && string.Equals(principal.FindFirst("email_verified")?.Value, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            subjects.Add(email);
+        }
+
         var match = options.CurrentValue.Users.FirstOrDefault(u =>
             !string.IsNullOrWhiteSpace(u.Subject) && subjects.Contains(u.Subject, StringComparer.OrdinalIgnoreCase));
         if (match is null)
@@ -179,6 +190,7 @@ public static class AuthSetup
                 o.Scope.Clear();
                 o.Scope.Add("openid");
                 o.Scope.Add("profile");
+                o.Scope.Add("email");
             });
     }
 
