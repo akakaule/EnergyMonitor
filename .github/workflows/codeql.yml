@@ -1,11 +1,9 @@
 name: CodeQL
 
+# Manual only: code scanning is not enabled for this private repository, so uploading results fails.
+# Restore the push, pull_request and schedule triggers if GitHub Code Security is enabled later.
 on:
-  push:
-    branches: [main]
-  pull_request:
-  schedule:
-    - cron: '17 4 * * 1'
+  workflow_dispatch:
 
 permissions:
   # A private repository also needs actions: read for the CodeQL action to read its own run.
