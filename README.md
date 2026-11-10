@@ -140,7 +140,7 @@ Evaluated only on complete Danish calendar days. Defaults are starting values fo
 
 ## Deployment
 
-Nothing has been deployed by this repository's author; the steps below are the intended path.
+A `dev` environment was deployed from a workstation on 10 November 2026 using the Azure Container Registry variant described under *Deploying from a workstation* below. The **Deploy** workflow (GHCR) has not been run.
 
 1. **Sign-in app registration** (Entra ID): single tenant, web platform. The redirect URI is the `redirectUri` output of the deployment (`https://<app>/signin-oidc`). Create a client secret.
 2. **Resource group**: `az group create -n rg-energymonitor-dev -l westeurope`.
@@ -150,6 +150,23 @@ Nothing has been deployed by this repository's author; the steps below are the i
 6. Sign in, link the metering points under Indstillinger, press *Synkronisér nu*, and *Send testbesked*.
 
 `dev` and `prod` are separate resource groups with separate parameter files and GitHub environments.
+
+### Deploying from a workstation (Azure Container Registry)
+
+No GitHub token or deployment identity is needed; the app pulls from a registry in its own resource group with its managed identity. A Basic registry adds about 5 USD/month.
+
+```sh
+# 1. Everything except the app, so the image and secrets exist before it starts
+az deployment group create -g rg-energymonitor-dev -f infra/main.bicep -p infra/dev.bicepparam \
+  -p createRegistry=true deployApp=false vaultAdminObjectId=$(az ad signed-in-user show --query id -o tsv)
+# 2. Build the image in the registry, and store the secrets in the vault (step 5 above)
+az acr build --registry <registryName output> --image energy-monitor:$(git rev-parse --short HEAD) .
+# 3. The app
+az deployment group create -g rg-energymonitor-dev -f infra/main.bicep -p infra/dev.bicepparam \
+  -p createRegistry=true vaultAdminObjectId=<same id> containerImage=<registryLoginServer output>/energy-monitor:<tag>
+```
+
+Then add the `redirectUri` output to the app registration.
 
 ### Expected cost
 
@@ -161,7 +178,7 @@ An estimate to check against the [Azure pricing calculator](https://azure.micros
 | Log Analytics + Application Insights | Ingestion capped at 0.1 GB/day | below 1 USD, normally inside the free allowance |
 | Storage account (tables) | A few MB, a few hundred thousand transactions | below 0.10 USD |
 | Key Vault | Three secrets, re-read every 30 minutes | below 0.10 USD |
-| Container registry | GHCR | free |
+| Container registry | GHCR, or a Basic Azure Container Registry | free, or about 5 USD |
 
 The always-on replica is the whole cost. It is the price of running the scheduler inside the app; a scheduled Container Apps Job with a scale-to-zero app would be cheaper and is the first thing to change if cost matters more than simplicity.
 
@@ -186,7 +203,7 @@ Verified locally on 10 November 2026. "Fakes" means the in-repo fake Eloverblik 
 | 5. Notification: test message, failure kept for retry without duplicate event | `ApiTests.TestMessage_…`, `PipelineTests.TelegramFailure_…`; test message also sent from the UI |
 | 6. UI on iPhone and desktop, freshness and latest complete date visible | Rendered in a browser against the running stack; at 390 px no element overflows and every control is at least 40 px high; screenshots reviewed at 500 px and 1280 px; manifest and service worker present. **Not checked on a physical iPhone or installed to a home screen.** |
 | 7. Security: unauthorized calls rejected, no tokens in frontend, source or logs | `ApiTests` (every endpoint: 401 unauthenticated, 403 not on the allowlist, 403 viewer on admin), `PipelineTests.NothingSecret_ReachesTheLogs`, CSRF header test, production start refused without OIDC configuration |
-| 8. Deploy: Bicep and Actions documented; restart without data loss or duplicate alarms | Restart tests against in-memory storage and against Azurite; `az bicep build` and `docker build` succeed; container smoke-tested. **No Azure deployment was made and the workflows have not run on GitHub.** |
+| 8. Deploy: Bicep and Actions documented; restart without data loss or duplicate alarms | Restart tests against in-memory storage and against Azurite; `az bicep build` and `docker build` succeed; container smoke-tested. A dev environment was deployed to Azure and checked for health, 401 on the API and the sign-in redirect; CI runs green on GitHub. **The Deploy workflow has not been run.** |
 
 Not verified against the real services: the live Eloverblik API (the client follows the Swagger fetched on 9 November 2026; no personal token was available), live Telegram, and a real Entra ID sign-in.
 

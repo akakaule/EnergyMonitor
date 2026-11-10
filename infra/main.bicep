@@ -17,7 +17,16 @@ param location string = resourceGroup().location
 @description('Container image, e.g. ghcr.io/<owner>/energy-monitor:<tag>.')
 param containerImage string
 
-@description('Registry server for a private image, e.g. ghcr.io. Leave empty for a public image.')
+@description('Create an Azure Container Registry in this resource group and pull from it with the managed identity of the app.')
+param createRegistry bool = false
+
+@description('Deploy the container app. Set to false for a first pass that only creates the registry, vault and storage, so the image and secrets can be put in place before the app starts.')
+param deployApp bool = true
+
+@description('Object id of a person who may write secrets to the Key Vault (Key Vault Secrets Officer). Empty for none.')
+param vaultAdminObjectId string = ''
+
+@description('Registry server for a private image outside Azure, e.g. ghcr.io. Leave empty for a public image or when createRegistry is true.')
 param registryServer string = ''
 
 @description('Registry user name for a private image.')
@@ -46,6 +55,8 @@ var suffix = uniqueString(resourceGroup().id)
 var baseName = 'energymonitor-${environmentName}'
 var tableDataContributor = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 var keyVaultSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
+var keyVaultSecretsOfficer = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+var acrPull = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'id-${baseName}'
@@ -118,6 +129,36 @@ resource vaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+resource officerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(vaultAdminObjectId)) {
+  scope: vault
+  name: guid(vault.id, vaultAdminObjectId, keyVaultSecretsOfficer)
+  properties: {
+    principalId: vaultAdminObjectId
+    principalType: 'User'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficer)
+  }
+}
+
+resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = if (createRegistry) {
+  name: take('crem${environmentName}${suffix}', 50)
+  location: location
+  sku: { name: 'Basic' }
+  properties: {
+    // Pulled with the managed identity; there is no admin password to leak.
+    adminUserEnabled: false
+  }
+}
+
+resource registryRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createRegistry) {
+  scope: registry
+  name: guid(registry.id, identity.id, acrPull)
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPull)
+  }
+}
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: 'cae-${baseName}'
   location: location
@@ -144,7 +185,7 @@ var chatSettings = map(range(0, length(telegramChatIds)), i => {
 
 var privateRegistry = !empty(registryServer)
 
-resource app 'Microsoft.App/containerApps@2024-03-01' = {
+resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployApp) {
   name: 'ca-${baseName}'
   location: location
   identity: {
@@ -163,9 +204,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         transport: 'auto'
       }
       secrets: privateRegistry ? [{ name: 'registry-password', value: registryPassword }] : []
-      registries: privateRegistry
-        ? [{ server: registryServer, username: registryUsername, passwordSecretRef: 'registry-password' }]
-        : []
+      registries: createRegistry
+        ? [{ server: registry!.properties.loginServer, identity: identity.id }]
+        : privateRegistry
+            ? [{ server: registryServer, username: registryUsername, passwordSecretRef: 'registry-password' }]
+            : []
     }
     template: {
       containers: [
@@ -197,10 +240,12 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: 1, maxReplicas: 1 }
     }
   }
-  dependsOn: [storageRole, vaultRole]
+  dependsOn: [storageRole, vaultRole, registryRole]
 }
 
-output appUrl string = 'https://${app.properties.configuration.ingress.fqdn}'
-output redirectUri string = 'https://${app.properties.configuration.ingress.fqdn}/signin-oidc'
+output appUrl string = deployApp ? 'https://${app!.properties.configuration.ingress.fqdn}' : ''
+output redirectUri string = deployApp ? 'https://${app!.properties.configuration.ingress.fqdn}/signin-oidc' : ''
+output registryName string = createRegistry ? registry!.name : ''
+output registryLoginServer string = createRegistry ? registry!.properties.loginServer : ''
 output keyVaultName string = vault.name
 output storageAccountName string = storage.name
