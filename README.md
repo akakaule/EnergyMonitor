@@ -212,3 +212,11 @@ Not verified against the real services: the live Eloverblik API (the client foll
 ## Later: Home Assistant
 
 Not implemented, but the seams exist: `IMeasurementSource`, `INotificationChannel` and the neutral `Measurement` record (`sourceId`, `propertyId`, `metric`, `value`, `unit`, `observedAtUtc`, `quality`). A future Home Assistant adapter in the summer house should push selected events and a heartbeat outbound to an authenticated endpoint here, so no inbound ports are opened there.
+
+## Electricity prices and read-only MCP
+
+Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and six `/mcp` tools share `EnergyQueryService` and the decimal calculator in Core.
+
+Enable `Pricing:Enabled` in dev to register dated agreements in Settings. `Mcp:Enabled` additionally requires `Mcp:Authority`, `Mcp:Audience`, `Mcp:Resource` (the public HTTPS `/mcp` URL) and a delegated `Mcp:ReadScope` (default `energy.read`). Browser sign-in cookies do not authorize MCP. The OAuth provider must issue signed access tokens for that audience, and the authenticated subject must also match the existing `Auth:Users` allowlist. Google browser ID tokens are not API access tokens for this resource.
+
+The Bicep equivalents are `pricingEnabled`, `mcpEnabled`, `mcpAuthority`, `mcpAudience`, `mcpResource`, `mcpReadScope`. Keep both flags off in production until per-property data, client login and an invoice have been checked in dev.

@@ -325,7 +325,7 @@ public static partial class Endpoints
 
         admin.MapPut("/properties/{id}", async (
             string id, PropertyUpdate update,
-            IPropertyStore properties, IConsumptionStore consumption, IAlertStore alerts, IStateStore state, CancellationToken ct) =>
+            IPropertyStore properties, IConsumptionStore consumption, IAlertStore alerts, IStateStore state, EnergyMonitor.Web.Pricing.PricingStore pricing, CancellationToken ct) =>
         {
             if (await properties.GetAsync(id, ct) is not { } property)
             {
@@ -343,6 +343,7 @@ public static partial class Endpoints
             {
                 // Consumption of another meter must not be mixed into this property's history or baseline.
                 await ClearDataAsync(id, consumption, alerts, state, ct);
+                await pricing.DeleteAsync(id, ct);
             }
 
             await properties.UpsertAsync(
@@ -351,7 +352,7 @@ public static partial class Endpoints
         });
 
         admin.MapDelete("/properties/{id}/data", async (
-            string id, IPropertyStore properties, IConsumptionStore consumption, IAlertStore alerts, IStateStore state, CancellationToken ct) =>
+            string id, IPropertyStore properties, IConsumptionStore consumption, IAlertStore alerts, IStateStore state, EnergyMonitor.Web.Pricing.PricingStore pricing, CancellationToken ct) =>
         {
             if (await properties.GetAsync(id, ct) is null)
             {
@@ -359,12 +360,13 @@ public static partial class Endpoints
             }
 
             await ClearDataAsync(id, consumption, alerts, state, ct);
+            await pricing.DeleteAsync(id, ct);
             return Results.NoContent();
         });
 
         admin.MapGet("/export", async (
             IPropertyStore properties, IConsumptionStore consumption, IAlertStore alerts, SummaryService summaries,
-            NotificationSettingsService settings, TimeProvider time, CancellationToken ct) =>
+            NotificationSettingsService settings, TimeProvider time, EnergyMonitor.Web.Pricing.PricingStore pricing, CancellationToken ct) =>
         {
             var exported = new List<object>();
             foreach (var property in await properties.ListAsync(ct))
@@ -372,6 +374,8 @@ public static partial class Endpoints
                 exported.Add(new
                 {
                     property,
+                    pricing = await pricing.GetConfigurationAsync(property.Id, ct),
+                    priceSources = await pricing.GetSourcesAsync(property.Id, ct),
                     rules = await summaries.GetRulesAsync(property.Id, ct),
                     events = await alerts.GetEventsAsync(property.Id, ct),
                     days = await consumption.GetDailyAsync(property.Id, DateOnly.MinValue, DateOnly.MaxValue.AddDays(-1), ct),

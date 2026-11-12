@@ -51,6 +51,14 @@ param telegramChatIds array = []
 @description('Daily ingestion cap for Log Analytics in GB, to keep cost predictable.')
 param logDailyCapGb string = '0.1'
 
+@description('Enable pricing after property price terms have been verified in dev.')
+param pricingEnabled bool = false
+param mcpEnabled bool = false
+param mcpAuthority string = ''
+param mcpAudience string = ''
+param mcpResource string = ''
+param mcpReadScope string = 'energy.read'
+
 var suffix = uniqueString(resourceGroup().id)
 var baseName = 'energymonitor-${environmentName}'
 var tableDataContributor = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
@@ -224,6 +232,12 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployApp) {
               { name: 'KeyVault__Uri', value: vault.properties.vaultUri }
               { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString }
               { name: 'Auth__Mode', value: 'Oidc' }
+              { name: 'Pricing__Enabled', value: string(pricingEnabled) }
+              { name: 'Mcp__Enabled', value: string(mcpEnabled) }
+              { name: 'Mcp__Authority', value: mcpAuthority }
+              { name: 'Mcp__Audience', value: mcpAudience }
+              { name: 'Mcp__Resource', value: mcpResource }
+              { name: 'Mcp__ReadScope', value: mcpReadScope }
               { name: 'Auth__Authority', value: authAuthority }
               { name: 'Auth__ClientId', value: authClientId }
             ],

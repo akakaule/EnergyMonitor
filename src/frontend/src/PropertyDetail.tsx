@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PropertyCosts } from './Pricing';
 import { api, type DayValue } from './api';
 import { BarChart, type Bar } from './BarChart';
 import { AlertList, ErrorNote, StatusBadge, useLoad } from './common';
@@ -49,6 +50,7 @@ export function PropertyDetail({ id }: { id: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [table, setTable] = useState(false);
 
+  const features = useLoad(() => api.features(), 'features');
   const properties = useLoad(() => api.properties(), 'properties');
   const daily = useLoad(() => api.daily(id, from, to), `${id}|${from}|${to}`);
   const alerts = useLoad(() => api.propertyAlerts(id), `alerts|${id}`);
@@ -118,6 +120,8 @@ export function PropertyDetail({ id }: { id: string }) {
           <button type="button" className="button button-small" onClick={() => shift(1)} disabled={to >= today()} aria-label="Næste periode">›</button>
         </div>
       </div>
+
+      {features.data?.pricing && <PropertyCosts id={id} from={from} to={to} />}
 
       {daily.error && <ErrorNote message={daily.error} onRetry={daily.reload} />}
 

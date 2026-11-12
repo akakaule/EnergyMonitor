@@ -76,8 +76,9 @@ public sealed class AppFactory : WebApplicationFactory<Program>
 
     private readonly WebApplication _fake;
 
-    public AppFactory(ITableBackend? backend = null, FakeState? fake = null, FakeTimeProvider? time = null)
+    public AppFactory(ITableBackend? backend = null, FakeState? fake = null, FakeTimeProvider? time = null, bool pricing = false, bool mcp = false)
     {
+        Pricing = pricing; Mcp = mcp;
         Backend = backend ?? new InMemoryTableBackend();
         Time = time ?? new FakeTimeProvider(Start);
         Fake = fake ?? new FakeState();
@@ -92,6 +93,8 @@ public sealed class AppFactory : WebApplicationFactory<Program>
         _fake.StartAsync().GetAwaiter().GetResult();
     }
 
+    private bool Pricing { get; }
+    private bool Mcp { get; }
     public ITableBackend Backend { get; }
 
     public FakeTimeProvider Time { get; }
@@ -108,6 +111,11 @@ public sealed class AppFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+        builder.UseSetting("Pricing:Enabled", Pricing.ToString());
+        builder.UseSetting("Mcp:Enabled", Mcp.ToString());
+        builder.UseSetting("Mcp:Authority", "https://issuer.test");
+        builder.UseSetting("Mcp:Audience", "energy");
+        builder.UseSetting("Mcp:Resource", "https://energy.test/mcp");
         builder.UseSetting("Storage:Mode", "InMemory");
         builder.UseSetting("Schedule:Enabled", "false");
         builder.UseSetting("Auth:Mode", AuthOptions.ModeDevelopment);

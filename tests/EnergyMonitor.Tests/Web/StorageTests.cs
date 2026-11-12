@@ -1,6 +1,8 @@
 using System.Net.Sockets;
 using Azure.Data.Tables;
 using EnergyMonitor.Core.Abstractions;
+using EnergyMonitor.Core.Pricing;
+using EnergyMonitor.Web.Pricing;
 using EnergyMonitor.Core.Model;
 using EnergyMonitor.FakeUpstreams;
 using EnergyMonitor.Tests.Core;
@@ -16,9 +18,60 @@ namespace EnergyMonitor.Tests.Web;
 /// </summary>
 public abstract class StorageContract
 {
+    [Fact]
+    public async Task ImportedChargeHistory_CrossesMonths_AndReplaysReplaceRates()
+    {
+        var backend = CreateBackend();
+        var store = new PricingStore(backend);
+        var from = DateTimeOffset.Parse("2026-10-31T23:00:00Z");
+        var to = from.AddHours(2);
+        var rate = new TariffRate("grid", "owner", "Network", from, to, 0.5m, "kWh", "Excluded", "Eloverblik.historical");
+        var link = new TariffLink("grid", "owner", "D03", from, to, 1);
+        await store.SaveImportedChargesAsync("home", new([link], [rate], false), from, to, default);
+        await store.SaveImportedChargesAsync("home", new([link], [rate with { Price = 0.7m }], false), from, to, default);
+        var data = await new PricingStore(backend).GetImportedChargesAsync("home", from, to, default);
+        Assert.Equal(2, data.Rates.Count);
+        Assert.All(data.Rates, r => Assert.Equal(0.7m, r.Price));
+        await store.DeleteAsync("home", default);
+        Assert.Empty((await store.GetImportedChargesAsync("home", from, to, default)).Rates);
+    }
+
+    [Fact]
+    public async Task LargePricingConfigurationAndEvidence_AreChunkedBelowTablePropertyLimits()
+    {
+        var store = new PricingStore(CreateBackend());
+        var start = DateTimeOffset.Parse("2026-11-01T00:00:00Z");
+        var rates = Enumerable.Range(0, 1000).Select(i => new TariffRate("rate" + i, "owner", "Network", start, start.AddDays(1), 0.123456789m, "kWh", "Excluded", "manual")).ToArray();
+        await store.SaveConfigurationAsync("large", new([], rates, [], false), default);
+        Assert.Equal(1000, (await store.GetConfigurationAsync("large", default)).Rates.Count);
+        var json = System.Text.Json.JsonSerializer.Serialize(new { description = new string('æ', 100000) });
+        await store.SaveChargeEvidenceAsync("large", "latest", json, default);
+        Assert.Equal(100000, (await store.GetChargeEvidenceAsync("large", default))[0].GetProperty("description").GetString()!.Length);
+    }
+
     protected abstract ITableBackend CreateBackend();
 
     private static Row R(string pk, string rk, string json = "{}", string? tag = null) => new(pk, rk, json, tag);
+
+    [Fact]
+    public async Task PricingHistory_RoundTripsAcrossRestart_AndCorrectionsReplace()
+    {
+        var backend = CreateBackend();
+        var store = new PricingStore(backend);
+        var start = DateTimeOffset.Parse("2026-10-31T23:45:00Z");
+        var config = new PricingConfiguration([new(start, null, "DK2", "Spot", null, null, 2.123456m, 15, 0.25m)], [], ["grid"], false);
+        await store.SaveConfigurationAsync("home", config, default);
+        await store.SavePricesAsync([new("DK2", start, start.AddMinutes(15), -0.123456789m), new("DK2", start.AddMinutes(15), start.AddMinutes(30), 0.2m)], default);
+        await store.SavePricesAsync([new("DK2", start, start.AddMinutes(15), -0.987654321m)], default);
+        var restarted = new PricingStore(backend);
+        Assert.Null((await restarted.GetConfigurationAsync("home", default)).Agreements[0].SupplierMarkup);
+        var prices = await restarted.GetPricesAsync("DK2", start, start.AddMinutes(30), default);
+        Assert.Equal(2, prices.Count);
+        Assert.Equal(-0.987654321m, prices[0].DkkPerKWh);
+        await restarted.DeleteAsync("home", default);
+        Assert.Empty((await restarted.GetConfigurationAsync("home", default)).Agreements);
+        Assert.Equal(2, (await restarted.GetPricesAsync("DK2", start, start.AddMinutes(30), default)).Count);
+    }
 
     [Fact]
     public async Task Upsert_Replaces_And_Get_ReturnsTheLatest()

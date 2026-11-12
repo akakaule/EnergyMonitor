@@ -21,6 +21,8 @@ public sealed class EloverblikOptions
     public int RetryBaseDelaySeconds { get; set; } = 60;
 
     public int MaxAttempts { get; set; } = 4;
+
+    public string PreferredAggregation { get; set; } = "Hour";
 }
 
 /// <summary>Waits between retries; replaced in tests so they do not sleep.</summary>
@@ -121,6 +123,52 @@ public sealed partial class EloverblikClient(
         }
 
         return points;
+    }
+
+    public async Task<(string Json, bool Historical)> GetChargeEvidenceAsync(string meter, DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        var zone = Core.Time.LocalDay.Zone(Core.Model.Property.DefaultTimeZone);
+        try
+        {
+            using var response = await SendAuthorizedAsync(() => new HttpRequestMessage(HttpMethod.Post,
+                "meteringpoints/meteringpoint/getchargelinkswithcharges")
+            {
+                Content = JsonContent.Create(new { query = new[] { new { meteringPointId = meter,
+                    from = Core.Time.LocalDay.StartUtc(from, zone), to = Core.Time.LocalDay.StartUtc(to, zone) } } }),
+            }, ct);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            // Remove meter identities from stored evidence and exported configuration.
+            if (!document.RootElement.TryGetProperty("result", out var root)
+                || !root.TryGetProperty("results", out var results)
+                || !results.EnumerateArray().Any()
+                || results.EnumerateArray().Any(r => r.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(error.GetString())))
+                throw new MeasurementSourceException("charge_result_failed", "Charge history is unavailable for the requested meter.");
+            var node = System.Text.Json.Nodes.JsonNode.Parse(document.RootElement.GetRawText())!;
+            RemoveMeterIds(node);
+            return (node.ToJsonString(), true);
+        }
+        catch (MeasurementSourceException ex) when (ex.ErrorCode == "http_404")
+        {
+            using var response = await SendAuthorizedAsync(() => new HttpRequestMessage(HttpMethod.Post,
+                "meteringpoints/meteringpoint/getcharges")
+            {
+                Content = JsonContent.Create(new { meteringPoints = new { meteringPoint = new[] { meter } } }),
+            }, ct);
+            var node = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))!;
+            RemoveMeterIds(node);
+            return (node.ToJsonString(), false);
+        }
+    }
+
+    private static void RemoveMeterIds(System.Text.Json.Nodes.JsonNode node)
+    {
+        if (node is System.Text.Json.Nodes.JsonObject obj)
+        {
+            obj.Remove("meteringPointId");
+            foreach (var child in obj.ToArray()) if (child.Value is not null) RemoveMeterIds(child.Value);
+        }
+        else if (node is System.Text.Json.Nodes.JsonArray array)
+            foreach (var child in array) if (child is not null) RemoveMeterIds(child);
     }
 
     internal static IEnumerable<TimeSeriesPoint> ReadPeriod(PeriodDto period, TimeZoneInfo zone)

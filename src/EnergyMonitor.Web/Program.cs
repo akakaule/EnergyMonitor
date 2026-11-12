@@ -4,6 +4,7 @@ using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.Exporter;
 using EnergyMonitor.Core.Abstractions;
 using EnergyMonitor.Web.Api;
+using EnergyMonitor.Web.Pricing;
 using EnergyMonitor.Web.Auth;
 using EnergyMonitor.Web.Eloverblik;
 using EnergyMonitor.Web.Jobs;
@@ -86,7 +87,18 @@ builder.Services.AddSingleton<MonitorPipeline>();
 builder.Services.AddSingleton<SchedulerService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<SchedulerService>());
 
+builder.Services.Configure<PricingOptions>(builder.Configuration.GetSection("Pricing"));
+builder.Services.AddSingleton<PricingStore>();
+builder.Services.AddSingleton<EnergyQueryService>();
+builder.Services.AddSingleton<PriceSyncService>();
+builder.Services.AddSingleton<SpotPriceClient>();
+builder.Services.AddHttpClient("spotprices", client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Pricing:BaseUrl"] ?? "https://api.energidataservice.dk/");
+    client.Timeout = TimeSpan.FromSeconds(100);
+});
 builder.AddEnergyMonitorAuth();
+builder.AddEnergyMcp();
 builder.Services.ConfigureApiChallenges();
 
 var app = builder.Build();
@@ -106,7 +118,7 @@ app.Use(async (context, next) =>
     headers["Referrer-Policy"] = "no-referrer";
     headers.ContentSecurityPolicy =
         "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'";
-    if (context.Request.Path.StartsWithSegments("/api"))
+    if (context.Request.Path.StartsWithSegments("/api") || context.Request.Path.StartsWithSegments("/mcp"))
     {
         // Consumption data must not be kept by shared caches or the service worker's HTTP cache.
         headers.CacheControl = "no-store";
@@ -124,6 +136,8 @@ app.UseAuthorization();
 app.MapDefaultEndpoints();
 app.MapAuthEndpoints();
 app.MapApi();
+app.MapPricing();
+app.MapEnergyMcp();
 app.MapFallback("/api/{**rest}", () => Results.NotFound()).AllowAnonymous();
 app.MapFallbackToFile("index.html").AllowAnonymous();
 

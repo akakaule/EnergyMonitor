@@ -12,6 +12,34 @@ namespace EnergyMonitor.Tests.Web;
 
 public class EloverblikClientTests
 {
+    [Fact]
+    public async Task Charges_FallBackToCurrentEvidence_WithoutTreatingItAsHistory()
+    {
+        var (client, handler, _, _) = Create((request, _) => TokenOr(request, () =>
+            request.RequestUri!.AbsolutePath.EndsWith("getchargelinkswithcharges", StringComparison.Ordinal)
+                ? Json("{}", HttpStatusCode.NotFound)
+                : Json($$"""{"result":[{"meteringPointId":"{{MeteringPoint}}","tariffs":[]}]}""")));
+        var evidence = await client.GetChargeEvidenceAsync(MeteringPoint, new(2026, 11, 1), new(2026, 11, 2), default);
+        Assert.False(evidence.Historical);
+        Assert.DoesNotContain(MeteringPoint, evidence.Json);
+        Assert.EndsWith("/getcharges", handler.Requests[^1].Path);
+        Assert.Contains("query", handler.Requests[^2].Body);
+    }
+
+    [Fact]
+    public async Task Source_CanRequestQuarterlyValues_AndFallsBackToHours()
+    {
+        var (client, handler, _, _) = Create((request, _) => TokenOr(request, () =>
+            request.RequestUri!.AbsolutePath.EndsWith("/Quarter", StringComparison.Ordinal)
+                ? Json("""{"errorCode":30008}""", HttpStatusCode.BadRequest)
+                : Json(Series(Period("2026-11-05T23:00:00Z", "2026-11-06T23:00:00Z", "PT1H", (1, "0.5", "A04"))))));
+        var source = new EloverblikMeasurementSource(client, new Monitor(new EloverblikOptions { PreferredAggregation = "Quarter" }));
+        var values = await source.FetchAsync(TestData.Sommerhus() with { MeteringPointId = MeteringPoint }, new(2026, 11, 5), new(2026, 11, 7), default);
+        Assert.EndsWith("/Quarter", handler.Requests[^2].Path);
+        Assert.EndsWith("/Hour", handler.Requests[^1].Path);
+        Assert.Single(values);
+    }
+
     private const string RefreshToken = "refresh-SECRET-token";
     private const string MeteringPoint = "571313174000000028";
 

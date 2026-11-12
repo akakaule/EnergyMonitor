@@ -4,7 +4,7 @@ using EnergyMonitor.Core.Time;
 
 namespace EnergyMonitor.Web.Eloverblik;
 
-public sealed class EloverblikMeasurementSource(EloverblikClient client) : IMeasurementSource
+public sealed class EloverblikMeasurementSource(EloverblikClient client, Microsoft.Extensions.Options.IOptionsMonitor<EloverblikOptions>? options = null) : IMeasurementSource
 {
     public const string Id = "eloverblik";
 
@@ -16,13 +16,19 @@ public sealed class EloverblikMeasurementSource(EloverblikClient client) : IMeas
         IReadOnlyList<TimeSeriesPoint> points;
         try
         {
-            points = await client.GetTimeSeriesAsync(property.MeteringPointId, fromLocal, toLocal, "Hour", zone, ct);
+            points = await client.GetTimeSeriesAsync(property.MeteringPointId, fromLocal, toLocal, options?.CurrentValue.PreferredAggregation == "Quarter" ? "Quarter" : "Hour", zone, ct);
         }
         catch (MeasurementSourceException ex) when (ex.ErrorCode == $"eloverblik_{EloverblikClient.AggregationNotSupported}")
         {
             // Not every metering point is read hourly. Daily values are stored as daily values;
             // hours are never made up from them.
-            points = await client.GetTimeSeriesAsync(property.MeteringPointId, fromLocal, toLocal, "Day", zone, ct);
+            if (options?.CurrentValue.PreferredAggregation == "Quarter")
+            {
+                try { points = await client.GetTimeSeriesAsync(property.MeteringPointId, fromLocal, toLocal, "Hour", zone, ct); }
+                catch (MeasurementSourceException hourly) when (hourly.ErrorCode == $"eloverblik_{EloverblikClient.AggregationNotSupported}")
+                { points = await client.GetTimeSeriesAsync(property.MeteringPointId, fromLocal, toLocal, "Day", zone, ct); }
+            }
+            else points = await client.GetTimeSeriesAsync(property.MeteringPointId, fromLocal, toLocal, "Day", zone, ct);
         }
 
         return [.. points.Select(p =>

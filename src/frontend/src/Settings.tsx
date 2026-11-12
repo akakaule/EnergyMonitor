@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PricingSettings } from './Pricing';
 import { api, errorText, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
 import { ErrorNote, useLoad } from './common';
 import { dateTime } from './format';
@@ -293,6 +294,7 @@ function NotificationForm({ initial }: { initial: NotificationSettings }) {
 }
 
 export function Settings({ me }: { me: Me }) {
+  const features = useLoad(() => api.features(), 'features');
   const admin = me.role === 'admin';
   const properties = useLoad(() => api.properties(), 'properties');
   const [points, setPoints] = useState<MeteringPoint[] | null>(null);
@@ -321,6 +323,7 @@ export function Settings({ me }: { me: Me }) {
 
           {properties.error && <ErrorNote message={properties.error} onRetry={properties.reload} />}
           {properties.data?.map((p) => <PropertySettings key={p.id} property={p} points={points} onSaved={properties.reload} />)}
+          {features.data?.pricing && properties.data?.map(p => <PricingSettings key={p.id} id={p.id} name={p.name} />)}
           <NewProperty points={points} onSaved={properties.reload} />
           <Notifications />
 

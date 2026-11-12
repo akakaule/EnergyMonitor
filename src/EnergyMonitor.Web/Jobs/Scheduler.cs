@@ -103,6 +103,7 @@ public sealed class ReportService(
 /// <summary>Sync, then rules, then delivery: the order every scheduled or manual run follows.</summary>
 public sealed partial class MonitorPipeline(
     SyncService sync,
+    EnergyMonitor.Web.Pricing.PriceSyncService prices,
     AlertService alerts,
     OutboxDispatcher dispatcher,
     ILogger<MonitorPipeline> logger)
@@ -118,6 +119,7 @@ public sealed partial class MonitorPipeline(
         // Rules run after a failed sync too: missing data and source failures are found there.
         await alerts.EvaluateAsync(ct);
         await dispatcher.DispatchAsync(ct);
+        await prices.RunAsync(ct);
         return run;
     }
 
