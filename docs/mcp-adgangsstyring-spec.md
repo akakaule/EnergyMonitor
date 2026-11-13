@@ -103,7 +103,18 @@ Indbygget ASP.NET Core rate limiting på `/mcp`, nøglet på `mcp_key` (eller `s
 - Oprettelse, tilbagekaldelse, ændring af `keysEnabled` og afviste kald logges med nøgle-id, ejer og administrator. Selve nøglen eller hashen logges aldrig.
 - Den eksisterende test `NothingSecret_ReachesTheLogs` udvides til at dække nøgler.
 
-### 6.6 Andre berørte steder
+### 6.6 Telegram-beskeder
+
+Følgende hændelser sender en besked til de eksisterende Telegram-modtagere gennem den eksisterende outbox (samme gentagelse ved fejl som alarmer):
+
+- En nøgle er oprettet: navn, ejer, ejendomme, udløbsdato og hvem der oprettede den.
+- En nøgle er tilbagekaldt: navn, ejer og hvem der tilbagekaldte den.
+- Nøgleadgang er sat på pause eller genoptaget, og af hvem.
+- En aktiv nøgle udløber om 7 dage (én besked pr. nøgle, sendt med den daglige rapport).
+
+Beskeden indeholder aldrig nøglen eller dens hash. Er Telegram ikke sat op, sker handlingen alligevel, og beskeden bliver i outboxen som i dag.
+
+### 6.7 Andre berørte steder
 
 - **Eksport** (`/api/admin/export`) medtager nøglernes metadata, men aldrig `hash`.
 - **Sletning af ejendomsdata eller skift af målepunkt** ændrer ikke nøglerne. Hvis en ejendom slettes helt (findes ikke i dag), fjernes den fra nøglernes `properties`.
@@ -142,11 +153,26 @@ Nyt punkt **MCP** under *System* mellem Drift og Notifikationer, med et ikon i s
 3. **Ny adgangsnøgle** (kort): Navn, Ejer (vælg fra brugerlisten, standard er en selv), Ejendomme (afkrydsning pr. ejendom plus "Alle ejendomme, også nye"), Gyldighed (30 / 90 / 365 dage, standard 90) og *Opret nøgle*.
 4. **Vis nøgle én gang**: efter oprettelse erstattes formularen af en boks med nøglen, en kopiér-knap og en tydelig tekst om, at den ikke kan vises igen. Under den vises færdige eksempler med nøglen indsat:
    - Claude Code: `claude mcp add --transport http energy-monitor <endpoint> --header "Authorization: Bearer <nøgle>"`
+   - Claude.ai og Claude Desktop: URL'en og header-værdien `Authorization: Bearer <nøgle>` til *Request headers*, hver med kopiér-knap.
    - Generisk JSON-konfiguration til klienter, der understøtter en `headers`-blok.
 
    Boksen forsvinder, når man forlader sektionen, og nøglen ligger ikke i `localStorage` eller i URL'en.
 
-### 8.3 Læsere
+### 8.3 Forbindelse fra Claude
+
+Både adgangsnøgler og OAuth skal virke fra Claudes klienter. Ifølge Anthropics dokumentation (læst 13. november 2026):
+
+- **Claude Code:** en fast nøgle sendes med `--header`, f.eks. `claude mcp add --transport http energy-monitor <endpoint> --header "Authorization: Bearer <nøgle>"`. Kræver serveren OAuth, tilføjes den uden header, og man logger ind via `/mcp` i Claude Code.
+- **Claude.ai og Claude Desktop (custom connector):** en fast nøgle indtastes under *Request headers* i dialogen *Add custom connector*. Til OAuth registrerer Claude selv sin klient hos autoriseringsserveren med Dynamic Client Registration (DCR) eller Client ID Metadata Documents, eller man udfylder et forhåndsregistreret client id og secret.
+
+Konsekvenser for OAuth-vejen:
+
+- Den valgte autoriseringsserver skal enten understøtte DCR/Client ID Metadata Documents eller have en forhåndsregistreret klient til Claude. Entra ID understøtter ikke DCR, og der er rapporteret fejl med Entra-beskyttede connectors, så OAuth-vejen skal afprøves med den konkrete udbyder før den lægges i produktion.
+- Den beskyttede ressources metadata (`/.well-known/oauth-protected-resource/mcp`) og `WWW-Authenticate`-svaret, som findes i dag, er det, Claude bruger til at finde autoriseringsserveren.
+
+Panelet viser vejledning til begge klienter: kommandoen til Claude Code og de værdier, der skal i felterne URL og *Request headers* for en custom connector.
+
+### 8.4 Læsere
 
 Læsere ser menupunktet MCP med deres egne nøgler i en skrivebeskyttet tabel og en note om, at en administrator opretter nøgler.
 
@@ -177,6 +203,8 @@ Backend (xUnit, både in-memory og Azurite):
 - `lastUsedAtUtc` opdateres og skrives højst hvert 5. minut.
 - 429 ved for mange kald.
 - Nøglen optræder ikke i logs.
+- Oprettelse, tilbagekaldelse og pause lægger én Telegram-besked i outboxen uden nøglen, og en fejlet afsendelse forhindrer ikke handlingen.
+- Advarsel om udløb sendes én gang pr. nøgle.
 
 Frontend (Vitest):
 
@@ -189,13 +217,16 @@ Frontend (Vitest):
 
 1. Implementér bag `Mcp:Enabled` (slået fra som standard), og udrul til dev.
 2. Slå `Mcp__Enabled=true` til på dev-containerappen. OAuth-indstillingerne er ikke nødvendige.
-3. Opret en nøgle i UI'et, forbind Claude Code, og kør `tools/list` og ét fuldt kald for én ejendom. Tilbagekald nøglen, og bekræft at næste kald får 401.
-4. Opdatér `README.md` og `elpriser-implementation.md` med den nye vej.
-5. Produktion først efter accept i dev.
+3. Opret en nøgle i UI'et, forbind Claude Code, og kør `tools/list` og ét fuldt kald for én ejendom. Gentag med en custom connector i Claude.ai. Tilbagekald nøglen, og bekræft at næste kald får 401, og at Telegram-beskederne er kommet.
+4. Afprøv OAuth-vejen med den valgte udbyder fra både Claude Code og Claude.ai (se 8.3).
+5. Opdatér `README.md` og `elpriser-implementation.md` med den nye vej.
+6. Produktion først efter accept i dev.
 
 ## 12. Acceptkriterier
 
-- En administrator kan i UI'et oprette en nøgle, forbinde Claude Code med den og hente data for de valgte ejendomme, uden ændringer i konfigurationen ud over `Mcp:Enabled`.
+- En administrator kan i UI'et oprette en nøgle, forbinde både Claude Code og en Claude.ai custom connector med den og hente data for de valgte ejendomme, uden ændringer i konfigurationen ud over `Mcp:Enabled`.
+- OAuth-vejen virker fortsat, når den er konfigureret.
+- Oprettelse, tilbagekaldelse og pause giver en Telegram-besked uden nøglen.
 - En tilbagekaldt eller udløbet nøgle afvises ved næste kald.
 - En nøgle kan ikke læse ejendomme uden for sin liste.
 - Hemmeligheden findes ikke i lager, logs, eksport eller API-svar ud over oprettelsessvaret.
@@ -206,10 +237,11 @@ Frontend (Vitest):
 Truffet 13. november 2026:
 
 1. **Kun administratorer opretter og tilbagekalder nøgler.** Læsere kan ikke oprette nøgler til sig selv; de kan kun se de nøgler, der er udstedt til dem (afsnit 8.3).
-2. **OAuth-vejen beholdes** som valgfrit alternativ til nøgler (afsnit 6.1). Den er nødvendig for klienter, der ikke kan sende en fast bearer-header.
+2. **OAuth-vejen beholdes** som valgfrit alternativ til nøgler (afsnit 6.1).
+3. **Claude skal kunne forbinde med både nøgle og OAuth**, fra Claude Code og fra Claude.ai/Desktop (afsnit 8.3).
+4. **Telegram-beskeder** sendes ved oprettelse, tilbagekaldelse, pause og forestående udløb (afsnit 6.6).
 
 ## 14. Åbne spørgsmål
 
-1. **Hvilke klienter skal understøttes?** Claude Code og andre klienter, der kan sende en fast header, virker med nøgler. Hvis Claude.ai-connectors eller Claude Desktop skal bruges direkte, skal det undersøges, om de kan sende en fast bearer-header, eller om de kræver OAuth. Kræver de OAuth, bruges OAuth-vejen, som derfor beholdes.
-2. **Brugerlisten i UI'et:** skal `Auth:Users` også flyttes til databasen i en senere omgang, så administratorer kan tilføje husstandsmedlemmer uden en ny udrulning?
-3. **Notifikation ved oprettelse:** skal en Telegram-besked sendes, når en nøgle oprettes eller tilbagekaldes?
+1. **Brugerlisten i UI'et:** skal `Auth:Users` også flyttes til databasen i en senere omgang, så administratorer kan tilføje husstandsmedlemmer uden en ny udrulning?
+2. **OAuth-udbyder:** hvilken autoriseringsserver skal bruges til OAuth-vejen? Den skal understøtte DCR/Client ID Metadata Documents eller en forhåndsregistreret klient til Claude (afsnit 8.3).
