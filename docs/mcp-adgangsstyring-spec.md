@@ -119,6 +119,22 @@ Beskeden indeholder aldrig nøglen eller dens hash. Er Telegram ikke sat op, ske
 - **Eksport** (`/api/admin/export`) medtager nøglernes metadata, men aldrig `hash`.
 - **Sletning af ejendomsdata eller skift af målepunkt** ændrer ikke nøglerne. Hvis en ejendom slettes helt (findes ikke i dag), fjernes den fra nøglernes `properties`.
 
+### 6.8 Faste garantier, der håndhæves af test
+
+Inspireret af HandleMCP, hvor en test fejler, hvis nogen tilføjer kode til at bestille eller betale:
+
+- **Kun læseværktøjer.** En test fejler, hvis et registreret MCP-værktøj ikke er markeret `ReadOnly`, eller hvis listen af værktøjer ændres uden at testen opdateres. Det gør det til en bevidst handling at give MCP mere magt.
+- **Ingen fulde målepunkts-id'er eller adresser i MCP-svar.** En test kalder alle seks værktøjer med testdata og fejler, hvis et svar indeholder et 18-cifret målepunkts-id eller en adresse. `get_price_breakdown` returnerer i dag aftalekonfiguration og importerede tarif-links, så det skal kontrolleres og om nødvendigt maskeres (`…4392`), som web-UI'et allerede gør.
+- **Nøgler kan aldrig nå `/api`.** Dækket af testene i afsnit 10.
+
+### 6.9 Aktivitet pr. nøgle
+
+HandleMCP har ingen oversigt over, hvem der har brugt serveren. For husstandens energidata er det værd at have:
+
+- Pr. nøgle tælles kald pr. værktøj pr. dansk dag. Tællerne samles i hukommelsen og skrives højst hvert 5. minut (samme rytme som `lastUsedAtUtc`), og de gemmes i 90 dage.
+- Der gemmes ikke argumenter, svar eller IP-adresser, kun nøgle-id, dag, værktøjsnavn og antal.
+- UI'et viser det i nøgletabellen som "Sidst brugt" og en udfoldelig linje med kald de seneste 30 dage fordelt på værktøj.
+
 ## 7. API (kun administratorer, under `/api/admin`, med eksisterende CSRF-header)
 
 | Metode | Sti | Beskrivelse |
@@ -126,6 +142,7 @@ Beskeden indeholder aldrig nøglen eller dens hash. Er Telegram ikke sat op, ske
 | GET | `/mcp` | Status: `serverEnabled` (`Mcp:Enabled`), `keysEnabled`, `oauthConfigured`, `endpoint` (offentlig URL til `/mcp`), `tools` (navne og beskrivelser), `scope`. |
 | PUT | `/mcp/settings` | `{ keysEnabled }`. |
 | GET | `/mcp/keys` | Alle nøgler uden `hash`, nyeste først, med beregnet `status`: `active`, `expired` eller `revoked`. |
+| GET | `/mcp/keys/{id}/activity` | Kald pr. værktøj pr. dag de seneste 30 dage (afsnit 6.9). |
 | POST | `/mcp/keys` | `{ name, owner, properties, expiresInDays }` med `expiresInDays` ∈ {30, 90, 365}. Svarer 201 med metadata og `secret` (den fulde nøgle), som kun returneres her. Fejlkoder: `invalid_name`, `unknown_owner`, `invalid_properties`, `invalid_expiry`. |
 | DELETE | `/mcp/keys/{id}` | Tilbagekalder. Idempotent. Svarer 204. |
 | GET | `/users` | Subjects og roller fra `Auth:Users` (til ejer-valget). Kun læsning. |
@@ -148,7 +165,7 @@ Nyt punkt **MCP** under *System* mellem Drift og Notifikationer, med et ikon i s
 
 ### 8.2 Panelet "MCP"
 
-1. **Forbindelse** (kort): status, endpoint-URL med kopiér-knap, kontakten *Tillad adgang med nøgler*, og en foldbar liste over de seks værktøjer med beskrivelser. Er `Mcp:Enabled` false, vises kun en note om, at det slås til ved udrulning (`mcpEnabled` i Bicep), og resten er skjult.
+1. **Forbindelse** (kort): status, endpoint-URL med kopiér-knap, kontakten *Tillad adgang med nøgler*, og en foldbar liste over de seks værktøjer med beskrivelser. Under listen står i klart sprog, hvad en forbundet assistent kan se (forbrug, omkostninger, aftaler og datastatus for de valgte ejendomme), og hvad den ikke kan (ændre noget, se adresser eller fulde målepunkts-id'er, se alarmer eller brugere). Tanken er lånt fra HandleMCP, der på samme måde skriver præcis op, hvad der sendes og ikke sendes. Er `Mcp:Enabled` false, vises kun en note om, at det slås til ved udrulning (`mcpEnabled` i Bicep), og resten er skjult.
 2. **Adgangsnøgler** (kort): tabel med Navn, Ejer, Ejendomme, Oprettet, Udløber, Sidst brugt, Status og en *Tilbagekald…*-knap. Tilbagekaldelse kræver bekræftelse i samme stil som "Slet forbrugsdata". Udløbne og tilbagekaldte nøgler vises nedtonet under en foldbar "Tidligere nøgler".
 3. **Ny adgangsnøgle** (kort): Navn, Ejer (vælg fra brugerlisten, standard er en selv), Ejendomme (afkrydsning pr. ejendom plus "Alle ejendomme, også nye"), Gyldighed (30 / 90 / 365 dage, standard 90) og *Opret nøgle*.
 4. **Vis nøgle én gang**: efter oprettelse erstattes formularen af en boks med nøglen, en kopiér-knap og en tydelig tekst om, at den ikke kan vises igen. Under den vises færdige eksempler med nøglen indsat:
@@ -205,6 +222,9 @@ Backend (xUnit, både in-memory og Azurite):
 - Nøglen optræder ikke i logs.
 - Oprettelse, tilbagekaldelse og pause lægger én Telegram-besked i outboxen uden nøglen, og en fejlet afsendelse forhindrer ikke handlingen.
 - Advarsel om udløb sendes én gang pr. nøgle.
+- Alle registrerede værktøjer er `ReadOnly`, og listen svarer til den forventede (afsnit 6.8).
+- Intet MCP-svar indeholder et fuldt målepunkts-id eller en adresse (afsnit 6.8).
+- Aktivitetstællere opdateres, skrives samlet og indeholder ikke argumenter (afsnit 6.9).
 
 Frontend (Vitest):
 
@@ -245,3 +265,17 @@ Truffet 13. november 2026:
 
 1. **Brugerlisten i UI'et:** skal `Auth:Users` også flyttes til databasen i en senere omgang, så administratorer kan tilføje husstandsmedlemmer uden en ny udrulning?
 2. **OAuth-udbyder:** hvilken autoriseringsserver skal bruges til OAuth-vejen? Den skal understøtte DCR/Client ID Metadata Documents eller en forhåndsregistreret klient til Claude (afsnit 8.3).
+
+## 15. Inspiration fra HandleMCP
+
+[HandleMCP](https://handlemcp.dk/) (læst 13. november 2026) er en MCP-server til bl.a. nemlig.com. Den kører lokalt på brugerens egen computer (stdio via `uvx`), så den har ingen nøgler, ingen OAuth og ingen adgangsstyring. Login til butikken gemmes som en session i styresystemets nøglering, aldrig som kodeord. Modellen passer ikke direkte til os, fordi vores server ligger i skyen og skal nås fra Claude.ai. Det tager vi med:
+
+| Fra HandleMCP | Hos os |
+|---|---|
+| En test fejler, hvis nogen tilføjer kode til at bestille eller betale. | Test af, at alle værktøjer er skrivebeskyttede, og at listen ikke ændres ubemærket (6.8). |
+| Skrivning er begrænset til kurven, og operationer *sætter* antal i stedet for at lægge til, så gentagelser er ufarlige. | Ikke relevant nu, da vi kun læser. Får MCP senere skriveværktøjer, skal de være idempotente på samme måde. |
+| Præcis liste over, hvad der sendes og ikke sendes, vist ved første brug. | Klar beskrivelse i panelet af, hvad en assistent kan og ikke kan se (8.2), og dataminimering i svarene (6.8). |
+| "Gem sessionen, ikke koden." | Vi gemmer kun nøglens hash (5). |
+| Ingen oversigt over aktivitet, ingen tilbagekaldelse, ingen nøgle pr. klient. | Det er netop huller, vi lukker: nøgle pr. klient, tilbagekaldelse, "sidst brugt" og aktivitet (6.9). |
+
+Ikke med: en lokal stdio-variant. Den ville kræve, at hver klient har adgang til Azure-lageret, og den virker ikke fra Claude.ai.
