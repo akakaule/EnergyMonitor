@@ -44,6 +44,21 @@ public sealed class EnergyQueryService(IPropertyStore properties, IConsumptionSt
         return CostCalculator.Calculate(start, end, intervals, config.Agreements, prices, config.Rates.Concat(importedRates).ToArray(), config.RequiredTariffCodes, config.TariffsConfirmed, links);
     }
 
+    /// <summary>"Ca. pris": always a total, with today's Eloverblik charges and the latest registered terms.</summary>
+    public async Task<ApproximateEstimate> EstimateAsync(string id, string from, string to, CancellationToken ct)
+    {
+        var (f, t) = ValidateRange(from, to);
+        var property = await PropertyAsync(id, ct);
+        var zone = LocalDay.Zone(property.TimeZone);
+        var start = LocalDay.StartUtc(f, zone);
+        var end = LocalDay.StartUtc(t.AddDays(1), zone);
+        var terms = (await pricing.GetConfigurationAsync(id, ct)).Agreements.OrderBy(a => a.FromUtc).LastOrDefault();
+        var intervals = await consumption.GetIntervalsAsync(id, EloverblikMeasurementSource.Id, start, end, ct);
+        var prices = await pricing.GetPricesAsync(terms?.Area ?? "DK1", start, end, ct);
+        var evidence = (await pricing.GetChargeEvidenceAsync(id, ct)) is [var latest, ..] ? latest : (System.Text.Json.JsonElement?)null;
+        return ApproximatePricing.Estimate(start, end, intervals, prices, evidence, terms);
+    }
+
     public async Task<object> ConsumptionAsync(string id, string from, string to, string resolution, CancellationToken ct)
     {
         var (f, t) = ValidateRange(from, to);

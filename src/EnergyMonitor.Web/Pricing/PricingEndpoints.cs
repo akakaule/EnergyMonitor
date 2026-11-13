@@ -18,6 +18,7 @@ public static class PricingEndpoints
         });
         api.MapGet("/overview", (string from, string to, EnergyQueryService q, CancellationToken ct) => q.OverviewAsync(from, to, ct));
         api.MapGet("/{id}/costs", (string id, string from, string to, EnergyQueryService q, CancellationToken ct) => q.CostsAsync(id, from, to, ct));
+        api.MapGet("/{id}/estimate", (string id, string from, string to, EnergyQueryService q, CancellationToken ct) => q.EstimateAsync(id, from, to, ct));
         api.MapGet("/{id}/consumption", (string id, string from, string to, string resolution, EnergyQueryService q, CancellationToken ct) => q.ConsumptionAsync(id, from, to, resolution, ct));
         api.MapGet("/{id}/breakdown", (string id, string from, string to, EnergyQueryService q, CancellationToken ct) => q.BreakdownAsync(id, from, to, ct));
         api.MapGet("/{id}/status", (string id, string from, string to, EnergyQueryService q, CancellationToken ct) => q.StatusAsync(id, from, to, ct));

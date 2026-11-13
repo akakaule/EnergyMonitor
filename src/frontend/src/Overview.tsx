@@ -1,7 +1,14 @@
 import { api, type Health, type PropertySummary } from './api';
 import { BarChart } from './BarChart';
 import { AlertList, ErrorNote, StatusBadge, useLoad } from './common';
-import { age, dateTime, dayRange, kWh, longDate, percent, shortDate } from './format';
+import { addDays, age, dateTime, dayRange, kWh, longDate, percent, shortDate } from './format';
+import { approxKr } from './Pricing';
+
+/** The approximate price of a span of days, or a dash while it loads or cannot be had. */
+function Approx({ id, from, to }: { id: string; from: string; to: string }) {
+  const estimate = useLoad(() => api.estimate(id, from, to), `estimate|${id}|${from}|${to}`);
+  return <span>{estimate.data ? approxKr(estimate.data.total) : '–'}</span>;
+}
 
 function Deviation({ p }: { p: PropertySummary }) {
   if (!p.latestComplete) return null;
@@ -17,7 +24,10 @@ function Deviation({ p }: { p: PropertySummary }) {
   );
 }
 
-export function PropertyCard({ p }: { p: PropertySummary }) {
+export function PropertyCard({ p, pricing = false }: { p: PropertySummary; pricing?: boolean }) {
+  const latest = p.latestComplete?.date;
+  const cost = (days: number) =>
+    pricing && latest ? <dd className="tile-cost"><Approx id={p.id} from={addDays(latest, -(days - 1))} to={latest} /></dd> : null;
   return (
     <a className="card card-link" href={`#/ejendom/${p.id}`} aria-label={`${p.name}: ${p.statusLabel}. Åbn detaljer`}>
       <div className="card-head">
@@ -28,6 +38,7 @@ export function PropertyCard({ p }: { p: PropertySummary }) {
       {p.latestComplete ? (
         <>
           <p className="hero">{kWh(p.latestComplete.kWh)}</p>
+          {pricing && <p className="hero-cost"><Approx id={p.id} from={p.latestComplete.date} to={p.latestComplete.date} /></p>}
           <p className="card-date">Seneste komplette døgn · {longDate(p.latestComplete.date)}</p>
           <Deviation p={p} />
         </>
@@ -44,10 +55,12 @@ export function PropertyCard({ p }: { p: PropertySummary }) {
         <div>
           <dt>Seneste 7 døgn</dt>
           <dd>{kWh(p.sum7)}</dd>
+          {cost(7)}
         </div>
         <div>
           <dt>Seneste 30 døgn</dt>
           <dd>{kWh(p.sum30)}</dd>
+          {cost(30)}
         </div>
       </dl>
       {p.latestComplete && (p.sum7 === null || p.sum30 === null) && (
@@ -97,6 +110,7 @@ export function Overview() {
   const properties = useLoad(() => api.properties(), 'properties');
   const alerts = useLoad(() => api.alerts('open'), 'alerts');
   const health = useLoad(() => api.health(), 'health');
+  const features = useLoad(() => api.features(), 'features');
 
   const open = alerts.data?.length ?? 0;
 
@@ -115,7 +129,7 @@ export function Overview() {
       {properties.loading && !properties.data && <p className="muted">Henter…</p>}
 
       <div className="cards">
-        {properties.data?.map((p) => <PropertyCard key={p.id} p={p} />)}
+        {properties.data?.map((p) => <PropertyCard key={p.id} p={p} pricing={features.data?.pricing ?? false} />)}
       </div>
       {properties.data?.length === 0 && (
         <p className="note note-info">Der er ikke oprettet nogen ejendomme endnu. Opret dem under Indstillinger.</p>

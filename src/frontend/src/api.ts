@@ -112,6 +112,17 @@ export interface Me {
   role: 'admin' | 'viewer';
 }
 
+/** "Ca. pris": always a total; what is assumed is listed in `assumptions`. Amounts in DKK, components excl. VAT. */
+export interface Estimate {
+  fromUtc: string;
+  toUtc: string;
+  total: number;
+  kWh: number;
+  consumptionCoverage: number;
+  components: Record<string, number>;
+  assumptions: string[];
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -159,6 +170,7 @@ export const api = {
   features: () => request<{ pricing: boolean; mcp: boolean }>('GET', '/api/features'),
   priceStatus: (id: string, from: string, to: string) => request<{ sources: { source: string; lastSuccessUtc: string | null; errorCode: string | null }[] }>('GET', `/api/energy/${id}/status?from=${from}&to=${to}`),
   costs: (id: string, from: string, to: string) => request<CostResult>('GET', `/api/energy/${id}/costs?from=${from}&to=${to}`),
+  estimate: (id: string, from: string, to: string) => request<Estimate>('GET', `/api/energy/${id}/estimate?from=${from}&to=${to}`),
   pricing: (id: string) => request<PricingConfiguration>('GET', `/api/energy/${id}/configuration`),
   savePricing: (id: string, config: PricingConfiguration) => request<void>('PUT', `/api/energy/${id}/configuration`, config),
   me: () => request<Me>('GET', '/api/me'),

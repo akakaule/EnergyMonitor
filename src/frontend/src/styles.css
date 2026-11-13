@@ -313,6 +313,34 @@ main > .small {
   font-variant-numeric: tabular-nums;
 }
 
+.hero-cost {
+  margin: 4px 0 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.estimate-total {
+  font-size: 2.25rem;
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 12px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats .tile-cost {
+  margin-top: 2px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.costs-detail {
+  margin: 0 0 16px;
+}
+
 .hero-empty {
   color: var(--muted);
 }

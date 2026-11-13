@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api, errorText } from './api';
+import { api, errorText, type Estimate } from './api';
 import { ErrorNote, useLoad } from './common';
 import { today } from './format';
 
@@ -56,13 +56,59 @@ export function CostSummary({ result: r }: { result: CostResult }) {
     <p className="muted small">Kilder: {r.sources.join(', ') || 'Ingen'}</p>
   </section>;
 }
+/** "ca. 1.950 kr": approximate amounts are shown in whole kroner. */
+export const approxKr = (amount: number) => `ca. ${new Intl.NumberFormat('da-DK', { maximumFractionDigits: 0 }).format(Math.round(amount))} kr`;
+const estimateLabels: [string, string][] = [['Energy', 'Spotpris'], ['Supplier', 'Elselskab'], ['Network', 'Nettarif'], ['Tax', 'Afgifter'], ['Subscription', 'Abonnementer'], ['Vat', 'Moms']];
+
+function estimateNotes(e: Estimate): string[] {
+  const has = (a: string) => e.assumptions.includes(a);
+  const notes: string[] = [];
+  if (has('charges_missing')) notes.push('Eloverblik har ikke sendt tariffer for målepunktet, så nettarif, afgifter og netabonnementer mangler.');
+  if (has('current_tariffs')) notes.push('Nettarif, afgifter og abonnementer er regnet efter Eloverbliks aktuelle satser for hele perioden. Sommertarifferne er lavere, så sommermåneder bliver lidt for høje.');
+  const markup = has('supplier_markup_missing');
+  const subscription = has('supplier_subscription_missing');
+  if (markup || subscription) {
+    const what = markup && subscription ? 'tillæg og abonnement er' : markup ? 'tillæg er' : 'abonnement er';
+    notes.push(`Elselskabets ${what} ikke registreret under Indstillinger → Elaftale og regnes som 0.`);
+  }
+  if (e.consumptionCoverage < 0.99) notes.push('Forbrug mangler for en del af perioden og er ikke med i beløbet.');
+  return notes;
+}
+
+/** "Ca. pris" for a period: always a total, with what is assumed spelled out. */
+export function EstimateCard({ id, from, to }: { id: string; from: string; to: string }) {
+  const estimate = useLoad(() => api.estimate(id, from, to), `estimate|${id}|${from}|${to}`);
+  const e = estimate.data;
+  const perKWh = e && e.kWh > 0 ? ` · ca. ${(e.total / e.kWh).toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr/kWh` : '';
+  return <section className="card">
+    <h2>Ca. pris</h2>
+    {estimate.error && <ErrorNote message={estimate.error} onRetry={estimate.reload} />}
+    {!e && !estimate.error && <p className="muted">Henter…</p>}
+    {e && <>
+      <p className="estimate-total">{approxKr(e.total)}</p>
+      <p className="card-date">{Math.round(e.kWh).toLocaleString('da-DK')} kWh{perKWh} · inkl. moms</p>
+      <dl className="stats">{estimateLabels.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{money(e.components[key] ?? 0)}</dd></div>)}</dl>
+      {estimateNotes(e).map(note => <p className="hint" key={note}>{note}</p>)}
+    </>}
+  </section>;
+}
+
 export function PropertyCosts({ id, from, to }: { id: string; from: string; to: string }) {
   const costs = useLoad(() => api.costs(id, from, to), `${id}|${from}|${to}`);
   const status = useLoad(() => api.priceStatus(id, from, to), `${id}|${from}|${to}`);
-  if (costs.error) return <ErrorNote message={costs.error} onRetry={costs.reload} />;
-  return <>{costs.data ? <CostSummary result={costs.data} /> : <p>Henter omkostninger…</p>}
+  const strict = <>
+    {costs.error ? <ErrorNote message={costs.error} onRetry={costs.reload} /> : costs.data ? <CostSummary result={costs.data} /> : <p>Henter omkostninger…</p>}
     {status.data?.sources.map(s => <p className="muted small" key={s.source}>{s.source}: senest hentet {s.lastSuccessUtc ? new Date(s.lastSuccessUtc).toLocaleString('da-DK', { timeZone: 'Europe/Copenhagen' }) : 'aldrig'}{s.errorCode ? ` · ${s.errorCode}` : ''}</p>)}
-    {status.error && <ErrorNote message={status.error} onRetry={status.reload} />}</>;
+    {status.error && <ErrorNote message={status.error} onRetry={status.reload} />}
+  </>;
+  const complete = costs.data?.total !== null && costs.data?.total !== undefined;
+  return <>
+    <EstimateCard id={id} from={from} to={to} />
+    {/* The exact calculation leads only when it has a full total; otherwise it is kept for reference. */}
+    {complete
+      ? strict
+      : <details className="advanced costs-detail"><summary>Detaljeret beregning efter registrerede vilkår</summary><div className="advanced-body">{strict}</div></details>}
+  </>;
 }
 
 /** The electricity agreement of one property; shown as a card inside that property's settings. */
