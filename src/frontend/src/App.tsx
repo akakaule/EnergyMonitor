@@ -4,13 +4,15 @@ import { Overview } from './Overview';
 import { PropertyDetail } from './PropertyDetail';
 import { Settings } from './Settings';
 
-type Route = { page: 'overview' } | { page: 'property'; id: string } | { page: 'settings' };
+type Route = { page: 'overview' } | { page: 'property'; id: string } | { page: 'settings'; section?: string };
 
 export function parseRoute(hash: string): Route {
   const path = hash.replace(/^#\/?/, '');
   const property = /^ejendom\/([a-z0-9-]+)$/.exec(path);
   if (property) return { page: 'property', id: property[1] };
-  if (path === 'indstillinger') return { page: 'settings' };
+  // Settings shows one section at a time: "indstillinger/notifikationer", "indstillinger/ejendom/hus".
+  const settings = /^indstillinger(?:\/([a-z0-9-]+(?:\/[a-z0-9-]+)?))?\/?$/.exec(path);
+  if (settings) return settings[1] ? { page: 'settings', section: settings[1] } : { page: 'settings' };
   return { page: 'overview' };
 }
 
@@ -46,7 +48,13 @@ export function App() {
   return (
     <div className="app">
       <header className="top">
-        <a className="brand" href="#/">Energy Monitor</a>
+        <a className="brand" href="#/" aria-label="Energy Monitor">
+          <svg className="brand-mark" viewBox="0 0 100 100" aria-hidden="true">
+            <rect width="100" height="100" rx="24" />
+            <polygon points="56,14 27,56 47,56 41,86 73,42 52,42" />
+          </svg>
+          <span className="brand-name">Energy Monitor</span>
+        </a>
         {me && (
           <nav aria-label="Hovedmenu">
             <a href="#/" aria-current={route.page === 'overview' ? 'page' : undefined}>Oversigt</a>
@@ -58,7 +66,7 @@ export function App() {
         {denied && <p className="note note-error" role="alert">{denied}</p>}
         {me && route.page === 'overview' && <Overview />}
         {me && route.page === 'property' && <PropertyDetail key={route.id} id={route.id} />}
-        {me && route.page === 'settings' && <Settings me={me} />}
+        {me && route.page === 'settings' && <Settings me={me} section={route.section} />}
         {!me && !denied && <p className="muted">Henter…</p>}
       </main>
     </div>

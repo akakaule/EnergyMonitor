@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { PricingSettings } from './Pricing';
 import { api, errorText, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
-import { ErrorNote, useLoad } from './common';
+import { ErrorNote, StatusBadge, useLoad } from './common';
 import { dateTime } from './format';
 
 type Result = { ok: boolean; text: string } | null;
@@ -32,40 +32,95 @@ function useAction(): [Result, boolean, (action: () => Promise<unknown>, done: s
   return [result, busy, run];
 }
 
-const TOKEN: Record<Health['token']['state'], string> = {
-  missing: 'Ikke registreret',
-  unknown: 'Registreret · udløbsdato ukendt (forny manuelt inden for et år)',
-  expired: 'Udløbet · skal fornyes',
-  expiring: 'Udløber snart',
-  ok: 'Gyldig',
+/** The settings screen shows one section at a time; the section is part of the address. */
+const DRIFT = 'drift';
+const NOTIFICATIONS = 'notifikationer';
+const NEW_PROPERTY = 'ny-ejendom';
+const propertySection = (id: string) => `ejendom/${id}`;
+const sectionHref = (section: string) => (section === DRIFT ? '#/indstillinger' : `#/indstillinger/${section}`);
+
+type Tone = 'ok' | 'warn' | 'error' | 'neutral';
+interface Fact { value: string; detail?: string; tone: Tone }
+
+// Status is always an icon and a word, never colour alone.
+const TONE_ICON: Record<Tone, string> = { ok: '✓', warn: '!', error: '×', neutral: '·' };
+
+const TOKEN: Record<Health['token']['state'], Fact> = {
+  missing: { value: 'Ikke registreret', tone: 'error' },
+  unknown: { value: 'Registreret', detail: 'Udløbsdato ukendt (forny manuelt inden for et år)', tone: 'warn' },
+  expired: { value: 'Udløbet', detail: 'Skal fornyes', tone: 'error' },
+  expiring: { value: 'Udløber snart', tone: 'warn' },
+  ok: { value: 'Gyldig', tone: 'ok' },
 };
 
-function Operations({ admin }: { admin: boolean }) {
+const details = (...parts: (string | undefined | false)[]) => parts.filter(Boolean).join(' · ') || undefined;
+
+function facts(h: Health): { label: string; fact: Fact }[] {
+  const sync = h.lastSync;
+  const token = TOKEN[h.token.state];
+  return [
+    {
+      label: 'Seneste synkronisering',
+      fact: !sync
+        ? { value: 'Ingen endnu', tone: 'neutral' }
+        : {
+            value: sync.status === 'Succeeded' ? 'Gennemført' : sync.status === 'Failed' ? 'Fejlet' : 'Kører',
+            detail: dateTime(sync.finishedAtUtc ?? sync.startedAtUtc),
+            tone: sync.status === 'Succeeded' ? 'ok' : sync.status === 'Failed' ? 'error' : 'neutral',
+          },
+    },
+    {
+      label: 'Seneste vellykkede',
+      fact: { value: dateTime(h.lastSuccessfulSyncUtc), tone: h.lastSuccessfulSyncUtc ? 'ok' : 'warn' },
+    },
+    {
+      label: 'Seneste fejl',
+      fact: h.lastError
+        ? { value: h.lastError.errorCode ?? 'ukendt', detail: dateTime(h.lastError.at), tone: 'warn' }
+        : { value: 'Ingen', tone: 'ok' },
+    },
+    {
+      label: 'Eloverblik-adgangsnøgle',
+      fact: {
+        ...token,
+        detail: details(token.detail, h.token.daysLeft !== null && h.token.daysLeft >= 0 && `${h.token.daysLeft} dage tilbage`),
+      },
+    },
+    {
+      label: 'Notifikationer',
+      fact: {
+        value: h.notifications.configured ? 'Telegram er sat op' : 'Ikke sat op',
+        detail: details(
+          !h.notifications.configured && 'Telegram mangler bot-nøgle eller modtagere',
+          h.notifications.pending > 0 && `${h.notifications.pending} besked(er) afventer afsendelse`,
+        ),
+        tone: h.notifications.configured ? 'ok' : 'warn',
+      },
+    },
+  ];
+}
+
+function PanelHead({ title, about, children }: { title: string; about?: ReactNode; children?: ReactNode }) {
+  return (
+    <header className="panel-head">
+      <div>
+        <h2>{title}</h2>
+        {about && <p className="muted">{about}</p>}
+      </div>
+      {children}
+    </header>
+  );
+}
+
+function Operations({ admin, hidden }: { admin: boolean; hidden: boolean }) {
   const health = useLoad(() => api.health(), 'health');
   const [result, busy, run] = useAction();
   const h = health.data;
 
   return (
-    <section className="card">
-      <h2>Drift</h2>
-      {health.error && <ErrorNote message={health.error} onRetry={health.reload} />}
-      {h && (
-        <dl className="facts">
-          <div><dt>Seneste synkronisering</dt><dd>{h.lastSync ? `${dateTime(h.lastSync.finishedAtUtc ?? h.lastSync.startedAtUtc)} · ${h.lastSync.status === 'Succeeded' ? 'gennemført' : h.lastSync.status === 'Failed' ? 'fejlet' : 'kører'}` : 'Ingen endnu'}</dd></div>
-          <div><dt>Seneste vellykkede</dt><dd>{dateTime(h.lastSuccessfulSyncUtc)}</dd></div>
-          <div><dt>Seneste fejl</dt><dd>{h.lastError ? `${h.lastError.errorCode ?? 'ukendt'} · ${dateTime(h.lastError.at)}` : 'Ingen'}</dd></div>
-          <div>
-            <dt>Eloverblik-adgangsnøgle</dt>
-            <dd>
-              {TOKEN[h.token.state]}
-              {h.token.daysLeft !== null && h.token.daysLeft >= 0 ? ` · ${h.token.daysLeft} dage tilbage` : ''}
-            </dd>
-          </div>
-          <div><dt>Notifikationer</dt><dd>{h.notifications.configured ? 'Telegram er sat op' : 'Telegram mangler bot-nøgle eller modtagere'}{h.notifications.pending > 0 ? ` · ${h.notifications.pending} besked(er) afventer afsendelse` : ''}</dd></div>
-        </dl>
-      )}
-      {admin && (
-        <>
+    <section className="panel" hidden={hidden}>
+      <PanelHead title="Drift" about="Synkronisering med Eloverblik og status for notifikationer.">
+        {admin && (
           <button
             type="button"
             className="button"
@@ -78,60 +133,148 @@ function Operations({ admin }: { admin: boolean }) {
           >
             Synkronisér nu
           </button>
-          <ResultNote result={result} />
-        </>
+        )}
+      </PanelHead>
+      <ResultNote result={result} />
+      {health.error && <ErrorNote message={health.error} onRetry={health.reload} />}
+      {h && (
+        <dl className="tiles">
+          {facts(h).map(({ label, fact }) => (
+            <div key={label} className="tile">
+              <dt>{label}</dt>
+              <dd>
+                <span className={`tone tone-${fact.tone}`} aria-hidden="true">{TONE_ICON[fact.tone]}</span>
+                <span className="tile-value">{fact.value}</span>
+                {fact.detail && <span className="tile-detail">{fact.detail}</span>}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {admin && (
+        <div className="card">
+          <h3>Eksport</h3>
+          <p className="hint">Henter konfiguration, alarmer og al forbrugshistorik som én JSON-fil (backup).</p>
+          <div className="actions">
+            <a className="button button-secondary" href="/api/admin/export" download="energy-monitor-export.json">Hent eksport</a>
+          </div>
+        </div>
       )}
     </section>
   );
 }
 
-function RuleRow({ propertyId, rule, onSaved }: { propertyId: string; rule: Rule; onSaved: () => void }) {
-  const [draft, setDraft] = useState(rule);
-  const [result, busy, run] = useAction();
+/** The list of metering points is fetched from Eloverblik on demand and shared by every form that picks one. */
+interface Points {
+  list: MeteringPoint[] | null;
+  busy: boolean;
+  error: string | null;
+  load: () => void;
+}
 
-  const set = (patch: Partial<Rule['params']>) => setDraft({ ...draft, params: { ...draft.params, ...patch } });
-  const title = rule.type === 'LowConsumption' ? 'Lavt forbrug' : rule.type === 'HighConsumption' ? 'Højt forbrug' : 'Manglende data';
-  const numeric = (value: string) => (value === '' ? 0 : Number(value));
-
+function MeteringPointField({ value, onChange, empty, points }: { value: string; onChange: (value: string) => void; empty: string; points: Points }) {
+  const id = useId();
   return (
-    <fieldset className="rule">
-      <legend>{title}</legend>
-      <label className="check">
-        <input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
-        Aktiv
-      </label>
-      {rule.type === 'MissingData' ? (
-        <label>
-          Timer uden nyt komplet døgn
-          <input type="number" min={24} max={720} value={draft.params.missingHours} onChange={(e) => set({ missingHours: numeric(e.target.value) })} />
-        </label>
+    <div className="field">
+      <label htmlFor={id}>Målepunkt</label>
+      <div className="field-row">
+        <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+          <option value="">{empty}</option>
+          {points.list?.map((p) => (
+            <option key={p.meteringPointId} value={p.meteringPointId}>
+              {p.address || 'Uden adresse'} ({p.masked}){p.readingOccurrence ? ` · ${p.readingOccurrence}` : ''}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="button button-secondary" disabled={points.busy} onClick={points.load}>
+          Hent målepunkter
+        </button>
+      </div>
+      {points.error ? (
+        <p className="note note-error" role="status">{points.error}</p>
       ) : (
-        <>
-          <label>
-            {rule.type === 'LowConsumption' ? 'Alarm under (% af median)' : 'Alarm over (% af median)'}
-            <input type="number" min={0} max={1000} value={draft.params.thresholdPercent} onChange={(e) => set({ thresholdPercent: numeric(e.target.value) })} />
-          </label>
-          <label>
-            Mindste median (kWh/døgn)
-            <input type="number" min={0} max={1000} step="0.5" value={draft.params.minBaselineKWh} onChange={(e) => set({ minBaselineKWh: numeric(e.target.value) })} />
-          </label>
-          {rule.type === 'LowConsumption' && (
-            <label>
-              Alarm efter (døgn i træk)
-              <input type="number" min={1} max={30} value={draft.params.escalateAfterDays} onChange={(e) => set({ escalateAfterDays: numeric(e.target.value) })} />
-            </label>
-          )}
-        </>
+        <p className="hint">
+          {points.list ? `${points.list.length} målepunkt(er) hentet fra Eloverblik.` : 'Hent listen fra Eloverblik for at vælge et målepunkt.'}
+        </p>
       )}
-      <button type="button" className="button button-small" disabled={busy} onClick={async () => (await run(() => api.saveRule(propertyId, draft), 'Gemt.')) && onSaved()}>
-        Gem regel
-      </button>
-      <ResultNote result={result} />
-    </fieldset>
+    </div>
   );
 }
 
-function PropertySettings({ property, points, onSaved }: { property: PropertySummary; points: MeteringPoint[] | null; onSaved: () => void }) {
+function Switch({ checked, onChange, children }: { checked: boolean; onChange: (checked: boolean) => void; children: ReactNode }) {
+  return (
+    <label className="switch">
+      <input type="checkbox" role="switch" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span>{children}</span>
+    </label>
+  );
+}
+
+function NumberField({ label, unit, ...input }: { label: string; unit: string } & InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <label className="field">
+      {label}
+      <span className="unit">
+        <input type="number" {...input} />
+        {unit}
+      </span>
+    </label>
+  );
+}
+
+const RULES: Record<Rule['type'], { title: string; about: string }> = {
+  LowConsumption: { title: 'Lavt forbrug', about: 'Når et døgns forbrug ligger under grænsen.' },
+  HighConsumption: { title: 'Højt forbrug', about: 'Når et døgns forbrug ligger over grænsen.' },
+  MissingData: { title: 'Manglende data', about: 'Når der ikke kommer nye komplette døgn.' },
+};
+
+function RuleRow({ propertyId, rule, onSaved }: { propertyId: string; rule: Rule; onSaved: () => void }) {
+  const [draft, setDraft] = useState(rule);
+  const [result, busy, run] = useAction();
+  const titleId = useId();
+
+  const set = (patch: Partial<Rule['params']>) => setDraft({ ...draft, params: { ...draft.params, ...patch } });
+  const numeric = (value: string) => (value === '' ? 0 : Number(value));
+  const { title, about } = RULES[rule.type];
+
+  return (
+    <div className={draft.enabled ? 'rule' : 'rule rule-off'} role="group" aria-labelledby={titleId}>
+      <div className="rule-head">
+        <h4 id={titleId}>{title}</h4>
+        <Switch checked={draft.enabled} onChange={(enabled) => setDraft({ ...draft, enabled })}>Aktiv</Switch>
+      </div>
+      <p className="hint">{about}</p>
+      <div className="rule-fields">
+        {rule.type === 'MissingData' ? (
+          <NumberField label="Uden nyt komplet døgn i" unit="timer" min={24} max={720} value={draft.params.missingHours} onChange={(e) => set({ missingHours: numeric(e.target.value) })} />
+        ) : (
+          <>
+            <NumberField
+              label={rule.type === 'LowConsumption' ? 'Alarm under' : 'Alarm over'}
+              unit="% af median"
+              min={0}
+              max={1000}
+              value={draft.params.thresholdPercent}
+              onChange={(e) => set({ thresholdPercent: numeric(e.target.value) })}
+            />
+            <NumberField label="Mindste median" unit="kWh/døgn" min={0} max={1000} step="0.5" value={draft.params.minBaselineKWh} onChange={(e) => set({ minBaselineKWh: numeric(e.target.value) })} />
+            {rule.type === 'LowConsumption' && (
+              <NumberField label="Alarm efter" unit="døgn i træk" min={1} max={30} value={draft.params.escalateAfterDays} onChange={(e) => set({ escalateAfterDays: numeric(e.target.value) })} />
+            )}
+          </>
+        )}
+      </div>
+      <div className="actions">
+        <button type="button" className="button button-small" disabled={busy} onClick={async () => (await run(() => api.saveRule(propertyId, draft), 'Gemt.')) && onSaved()}>
+          Gem regel
+        </button>
+        <ResultNote result={result} />
+      </div>
+    </div>
+  );
+}
+
+function PropertySettings({ property, points, pricing, hidden, onSaved }: { property: PropertySummary; points: Points; pricing: boolean; hidden: boolean; onSaved: () => void }) {
   const rules = useLoad(() => api.rules(property.id), `rules|${property.id}`);
   const [name, setName] = useState(property.name);
   const [monitoring, setMonitoring] = useState(property.monitoringEnabled);
@@ -141,113 +284,138 @@ function PropertySettings({ property, points, onSaved }: { property: PropertySum
   const [deleteResult, deleting, runDelete] = useAction();
 
   return (
-    <section className="card">
-      <h2>{property.name}</h2>
-      <div className="form">
-        <label>
-          Navn
-          <input type="text" maxLength={40} value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
-        <label>
-          Målepunkt
-          <select value={point} onChange={(e) => setPoint(e.target.value)}>
-            <option value="">{property.hasMeteringPoint ? `Behold nuværende (${property.meteringPoint})` : 'Ikke tilknyttet'}</option>
-            {points?.map((p) => (
-              <option key={p.meteringPointId} value={p.meteringPointId}>{p.address || 'Uden adresse'} ({p.masked})</option>
-            ))}
-          </select>
-        </label>
+    <section className="panel" hidden={hidden}>
+      <PanelHead
+        title={property.name}
+        about={
+          <>
+            {property.hasMeteringPoint ? `Målepunkt ${property.meteringPoint}` : 'Intet målepunkt er tilknyttet'} · <a href={`#/ejendom/${property.id}`}>Vis forbrug</a>
+          </>
+        }
+      >
+        <StatusBadge status={property.status} label={property.statusLabel} />
+      </PanelHead>
+
+      <div className="card">
+        <h3>Ejendom</h3>
+        <div className="fields">
+          <label className="field">
+            Navn
+            <input type="text" maxLength={40} value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <MeteringPointField
+            value={point}
+            onChange={setPoint}
+            empty={property.hasMeteringPoint ? `Behold nuværende (${property.meteringPoint})` : 'Ikke tilknyttet'}
+            points={points}
+          />
+        </div>
         {point !== '' && property.hasMeteringPoint && (
           <p className="note note-warn">Når målepunktet skiftes, slettes ejendommens hidtidige forbrugsdata og alarmer, og historikken hentes igen.</p>
         )}
-        <label className="check">
-          <input type="checkbox" checked={monitoring} onChange={(e) => setMonitoring(e.target.checked)} />
-          Overvågning aktiv (fjern markeringen for pause)
-        </label>
-        <button
-          type="button"
-          className="button"
-          disabled={busy}
-          onClick={async () => {
-            if (await run(() => api.saveProperty(property.id, name, point || null, monitoring), 'Gemt.')) {
-              setPoint('');
-              onSaved();
-            }
-          }}
-        >
-          Gem ejendom
-        </button>
-        <ResultNote result={result} />
+        <div className="switch-row">
+          <Switch checked={monitoring} onChange={setMonitoring}>Overvågning aktiv</Switch>
+          <p className="hint">Slå fra for at sætte overvågningen på pause.</p>
+        </div>
+        <div className="actions">
+          <button
+            type="button"
+            className="button"
+            disabled={busy}
+            onClick={async () => {
+              if (await run(() => api.saveProperty(property.id, name, point || null, monitoring), 'Gemt.')) {
+                setPoint('');
+                onSaved();
+              }
+            }}
+          >
+            Gem ejendom
+          </button>
+          <ResultNote result={result} />
+        </div>
       </div>
 
-      <h3>Alarmgrænser</h3>
-      <p className="muted small">Grænserne er startværdier til kalibrering. Et lavt forbrug er kun en indikator på mulig fejl.</p>
-      {rules.error && <ErrorNote message={rules.error} onRetry={rules.reload} />}
-      {rules.data?.map((r) => <RuleRow key={r.id + JSON.stringify(r)} propertyId={property.id} rule={r} onSaved={rules.reload} />)}
-
-      <h3>Data</h3>
-      {confirmDelete ? (
-        <div className="confirm">
-          <p>Slet alle forbrugsdata og alarmer for {property.name}? Historikken hentes igen ved næste synkronisering.</p>
-          <button type="button" className="button button-danger" disabled={deleting} onClick={async () => { await runDelete(() => api.deleteData(property.id), 'Data er slettet.'); setConfirmDelete(false); onSaved(); }}>
-            Ja, slet data
-          </button>
-          <button type="button" className="button button-small" onClick={() => setConfirmDelete(false)}>Fortryd</button>
+      <div className="card">
+        <h3>Alarmgrænser</h3>
+        <p className="hint">Grænserne er startværdier til kalibrering. Et lavt forbrug er kun en indikator på mulig fejl.</p>
+        {rules.error && <ErrorNote message={rules.error} onRetry={rules.reload} />}
+        <div className="rules">
+          {rules.data?.map((r) => <RuleRow key={r.id + JSON.stringify(r)} propertyId={property.id} rule={r} onSaved={rules.reload} />)}
         </div>
-      ) : (
-        <button type="button" className="button button-small" onClick={() => setConfirmDelete(true)}>Slet forbrugsdata…</button>
-      )}
-      <ResultNote result={deleteResult} />
+      </div>
+
+      {pricing && <PricingSettings id={property.id} />}
+
+      <div className="card danger-zone">
+        <h3>Farezone</h3>
+        {confirmDelete ? (
+          <div className="confirm">
+            <p>Slet alle forbrugsdata og alarmer for {property.name}? Historikken hentes igen ved næste synkronisering.</p>
+            <button type="button" className="button button-danger" disabled={deleting} onClick={async () => { await runDelete(() => api.deleteData(property.id), 'Data er slettet.'); setConfirmDelete(false); onSaved(); }}>
+              Ja, slet data
+            </button>
+            <button type="button" className="button button-secondary" onClick={() => setConfirmDelete(false)}>Fortryd</button>
+          </div>
+        ) : (
+          <div className="danger-row">
+            <p className="hint">Sletter alle forbrugsdata og alarmer for {property.name}. Historikken hentes igen ved næste synkronisering.</p>
+            <button type="button" className="button button-danger-outline" onClick={() => setConfirmDelete(true)}>Slet forbrugsdata…</button>
+          </div>
+        )}
+        <ResultNote result={deleteResult} />
+      </div>
     </section>
   );
 }
 
-function NewProperty({ points, onSaved }: { points: MeteringPoint[] | null; onSaved: () => void }) {
+function NewProperty({ points, hidden, onCreated }: { points: Points; hidden: boolean; onCreated: (id: string) => void }) {
   const [name, setName] = useState('');
   const [point, setPoint] = useState('');
   const [result, busy, run] = useAction();
   return (
-    <section className="card">
-      <h2>Ny ejendom</h2>
-      <div className="form">
-        <label>
-          Navn
-          <input type="text" maxLength={40} value={name} placeholder="f.eks. Sommerhus" onChange={(e) => setName(e.target.value)} />
-        </label>
-        <label>
-          Målepunkt
-          <select value={point} onChange={(e) => setPoint(e.target.value)}>
-            <option value="">Vælg senere</option>
-            {points?.map((p) => (
-              <option key={p.meteringPointId} value={p.meteringPointId}>{p.address || 'Uden adresse'} ({p.masked})</option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          className="button"
-          disabled={busy || name.trim() === ''}
-          onClick={async () => {
-            if (await run(() => api.createProperty(name, point || null), 'Ejendommen er oprettet.')) {
-              setName('');
-              setPoint('');
-              onSaved();
-            }
-          }}
-        >
-          Opret ejendom
-        </button>
-        <ResultNote result={result} />
+    <section className="panel" hidden={hidden}>
+      <PanelHead title="Ny ejendom" about="Opret en ejendom og knyt den til et målepunkt fra Eloverblik." />
+      <div className="card">
+        <div className="fields">
+          <label className="field">
+            Navn
+            <input type="text" maxLength={40} value={name} placeholder="f.eks. Sommerhus" onChange={(e) => setName(e.target.value)} />
+          </label>
+          <MeteringPointField value={point} onChange={setPoint} empty="Vælg senere" points={points} />
+        </div>
+        <div className="actions">
+          <button
+            type="button"
+            className="button"
+            disabled={busy || name.trim() === ''}
+            onClick={async () => {
+              let id = '';
+              if (await run(async () => { id = (await api.createProperty(name, point || null)).id; }, 'Ejendommen er oprettet.')) {
+                setName('');
+                setPoint('');
+                onCreated(id);
+              }
+            }}
+          >
+            Opret ejendom
+          </button>
+          <ResultNote result={result} />
+        </div>
       </div>
     </section>
   );
 }
 
-function Notifications() {
+function Notifications({ hidden }: { hidden: boolean }) {
   const settings = useLoad(() => api.notificationSettings(), 'notification-settings');
-  if (settings.error) return <section className="card"><h2>Notifikationer</h2><ErrorNote message={settings.error} onRetry={settings.reload} /></section>;
-  // The form starts from the stored settings, so it is only mounted once they are known.
-  return settings.data ? <NotificationForm initial={settings.data} /> : null;
+  return (
+    <section className="panel" hidden={hidden}>
+      <PanelHead title="Notifikationer" about="Beskeder sendes via Telegram." />
+      {settings.error && <ErrorNote message={settings.error} onRetry={settings.reload} />}
+      {/* The form starts from the stored settings, so it is only mounted once they are known. */}
+      {settings.data ? <NotificationForm initial={settings.data} /> : !settings.error && <p className="muted">Henter…</p>}
+    </section>
+  );
 }
 
 function NotificationForm({ initial }: { initial: NotificationSettings }) {
@@ -258,18 +426,20 @@ function NotificationForm({ initial }: { initial: NotificationSettings }) {
   const [preview, setPreview] = useState<string | null>(null);
 
   return (
-    <section className="card">
-      <h2>Notifikationer</h2>
-      <div className="form">
-        <label className="check">
-          <input type="checkbox" checked={daily} onChange={(e) => setDaily(e.target.checked)} />
-          Send daglig statusrapport kl. 09:00
-        </label>
-        <label>
-          Modtagere (Telegram chat-id’er, adskilt med komma)
-          <input type="text" inputMode="text" value={recipients} onChange={(e) => setRecipients(e.target.value)} />
-        </label>
-        <div className="row">
+    <>
+      <div className="card">
+        <h3>Modtagere og rapport</h3>
+        <div className="fields">
+          <label className="field field-narrow">
+            Modtagere
+            <input type="text" inputMode="text" value={recipients} onChange={(e) => setRecipients(e.target.value)} />
+            <span className="hint">Telegram chat-id’er, adskilt med komma.</span>
+          </label>
+        </div>
+        <div className="switch-row">
+          <Switch checked={daily} onChange={setDaily}>Send daglig statusrapport kl. 09:00</Switch>
+        </div>
+        <div className="actions">
           <button
             type="button"
             className="button"
@@ -278,62 +448,114 @@ function NotificationForm({ initial }: { initial: NotificationSettings }) {
           >
             Gem
           </button>
+          <ResultNote result={result} />
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Afprøvning</h3>
+        <p className="hint">Send en testbesked til modtagerne, eller se den rapport, der sendes i dag.</p>
+        <div className="actions">
           <button type="button" className="button button-secondary" disabled={testing} onClick={() => runTest(() => api.testNotification(), 'Testbeskeden er sendt.')}>
             Send testbesked
           </button>
           <button type="button" className="button button-secondary" onClick={async () => setPreview((await api.reportPreview().catch(() => ({ text: 'Rapporten kunne ikke hentes.' }))).text)}>
             Vis dagens rapport
           </button>
+          <ResultNote result={testResult} />
         </div>
-        <ResultNote result={result} />
-        <ResultNote result={testResult} />
         {preview && <pre className="preview">{preview}</pre>}
       </div>
-    </section>
+    </>
   );
 }
 
-export function Settings({ me }: { me: Me }) {
+function MenuLink({ section, active, children }: { section: string; active: string; children: ReactNode }) {
+  return <a href={sectionHref(section)} aria-current={section === active ? 'page' : undefined}>{children}</a>;
+}
+
+export function Settings({ me, section }: { me: Me; section?: string }) {
   const features = useLoad(() => api.features(), 'features');
   const admin = me.role === 'admin';
   const properties = useLoad(() => api.properties(), 'properties');
-  const [points, setPoints] = useState<MeteringPoint[] | null>(null);
+  const [pointList, setPointList] = useState<MeteringPoint[] | null>(null);
   const [pointsResult, loadingPoints, runPoints] = useAction();
+  // A property that was just created is not in the list until it has been fetched again.
+  const [created, setCreated] = useState<string | null>(null);
+
+  const points: Points = {
+    list: pointList,
+    busy: loadingPoints,
+    error: pointsResult && !pointsResult.ok ? pointsResult.text : null,
+    load: () => void runPoints(async () => setPointList(await api.meteringPoints()), ''),
+  };
+
+  const list = properties.data;
+  const known = (wanted: string) =>
+    list ? list.some((p) => propertySection(p.id) === wanted) || wanted === propertySection(created ?? '') : !properties.error;
+  const active =
+    admin && section && (section === NOTIFICATIONS || section === NEW_PROPERTY || (section.startsWith('ejendom/') && known(section)))
+      ? section
+      : DRIFT;
+  const waiting = active.startsWith('ejendom/') && !list?.some((p) => propertySection(p.id) === active);
+
+  // On a phone the menu is a row that scrolls sideways; keep the current section in view.
+  const menu = useRef<HTMLElement | null>(null);
+  const count = list?.length ?? 0;
+  useEffect(() => {
+    const nav = menu.current;
+    const current = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (nav && current) nav.scrollLeft = current.offsetLeft - (nav.clientWidth - current.offsetWidth) / 2;
+  }, [active, count]);
 
   return (
     <>
       <h1>Indstillinger</h1>
-      <Operations admin={admin} />
-      {!admin && <p className="note note-info">Du er logget ind som læser. Kun administratorer kan ændre indstillinger.</p>}
-      {admin && (
-        <>
-          <section className="card">
-            <h2>Målepunkter fra Eloverblik</h2>
-            <p className="muted small">Hent listen for at knytte et målepunkt til en ejendom.</p>
-            <button type="button" className="button button-secondary" disabled={loadingPoints} onClick={() => runPoints(async () => setPoints(await api.meteringPoints()), 'Målepunkter er hentet.')}>
-              Hent målepunkter
-            </button>
-            <ResultNote result={pointsResult} />
-            {points && (
-              <ul className="plain">
-                {points.map((p) => <li key={p.meteringPointId}>{p.address || 'Uden adresse'} · {p.masked}{p.readingOccurrence ? ` · ${p.readingOccurrence}` : ''}</li>)}
-              </ul>
-            )}
-          </section>
-
-          {properties.error && <ErrorNote message={properties.error} onRetry={properties.reload} />}
-          {properties.data?.map((p) => <PropertySettings key={p.id} property={p} points={points} onSaved={properties.reload} />)}
-          {features.data?.pricing && properties.data?.map(p => <PricingSettings key={p.id} id={p.id} name={p.name} />)}
-          <NewProperty points={points} onSaved={properties.reload} />
-          <Notifications />
-
-          <section className="card">
-            <h2>Eksport</h2>
-            <p className="muted small">Henter konfiguration, alarmer og al forbrugshistorik som én JSON-fil (backup).</p>
-            <a className="button button-secondary" href="/api/admin/export" download="energy-monitor-export.json">Hent eksport</a>
-          </section>
-        </>
-      )}
+      <div className={admin ? 'settings' : undefined}>
+        {admin && (
+          <nav className="settings-nav" aria-label="Indstillinger" ref={menu}>
+            <p className="nav-group">System</p>
+            <MenuLink section={DRIFT} active={active}>Drift</MenuLink>
+            <MenuLink section={NOTIFICATIONS} active={active}>Notifikationer</MenuLink>
+            <p className="nav-group">Ejendomme</p>
+            {list?.map((p) => <MenuLink key={p.id} section={propertySection(p.id)} active={active}>{p.name}</MenuLink>)}
+            <MenuLink section={NEW_PROPERTY} active={active}>
+              <span className="nav-plus" aria-hidden="true">+</span>
+              Ny ejendom
+            </MenuLink>
+          </nav>
+        )}
+        <div className="settings-body">
+          {admin && properties.error && <ErrorNote message={properties.error} onRetry={properties.reload} />}
+          <Operations admin={admin} hidden={active !== DRIFT} />
+          {!admin && <p className="note note-info">Du er logget ind som læser. Kun administratorer kan ændre indstillinger.</p>}
+          {admin && (
+            <>
+              {waiting && <p className="muted">Henter…</p>}
+              {list?.map((p) => (
+                <PropertySettings
+                  key={p.id}
+                  property={p}
+                  points={points}
+                  pricing={features.data?.pricing ?? false}
+                  hidden={active !== propertySection(p.id)}
+                  onSaved={properties.reload}
+                />
+              ))}
+              <NewProperty
+                points={points}
+                hidden={active !== NEW_PROPERTY}
+                onCreated={(id) => {
+                  setCreated(id);
+                  properties.reload();
+                  window.location.hash = sectionHref(propertySection(id));
+                }}
+              />
+              <Notifications hidden={active !== NOTIFICATIONS} />
+            </>
+          )}
+        </div>
+      </div>
     </>
   );
 }

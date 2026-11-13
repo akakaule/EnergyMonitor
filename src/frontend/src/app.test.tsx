@@ -56,6 +56,12 @@ describe('routing and errors', () => {
     expect(parseRoute('#/ejendom/../x')).toEqual({ page: 'overview' });
   });
 
+  it('parses a section of the settings screen', () => {
+    expect(parseRoute('#/indstillinger/notifikationer')).toEqual({ page: 'settings', section: 'notifikationer' });
+    expect(parseRoute('#/indstillinger/ejendom/hus')).toEqual({ page: 'settings', section: 'ejendom/hus' });
+    expect(parseRoute('#/indstillinger/')).toEqual({ page: 'settings' });
+  });
+
   it('explains known error codes', () => {
     expect(errorText(new ApiError(502, 'token_invalid'))).toContain('adgangsnøglen');
     expect(errorText(new ApiError(500, 'http_500'))).toContain('http_500');

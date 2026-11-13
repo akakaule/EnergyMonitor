@@ -76,13 +76,13 @@ export function AlertList({ alerts, onChanged, showProperty }: { alerts: Alert[]
     }
   };
 
-  if (alerts.length === 0) return <p className="muted">Ingen alarmer.</p>;
+  if (alerts.length === 0) return <p className="empty">Ingen alarmer.</p>;
   return (
     <>
       {error && <ErrorNote message={error} />}
       <ul className="alerts">
         {alerts.map((a) => (
-          <li key={a.id} className={a.state === 'Closed' ? 'alert alert-closed' : 'alert'}>
+          <li key={a.id} className={a.state === 'Closed' ? 'alert alert-closed' : `alert alert-${alertStatus(a).toLowerCase()}`}>
             <div className="alert-head">
               <StatusBadge status={a.state === 'Closed' ? 'Normal' : alertStatus(a)} label={a.state === 'Closed' ? `${a.label} · lukket` : a.label} />
               <span className="alert-when">

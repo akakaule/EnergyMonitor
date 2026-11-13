@@ -8,8 +8,10 @@ function Deviation({ p }: { p: PropertySummary }) {
   if (!p.hasBaseline || p.baseline === null || p.deviationPercent === null) {
     return <p className="card-compare muted">Utilstrækkelig historik til sammenligning</p>;
   }
+  // The arrow is drawn by the style sheet; the sign in the text already says the same in words.
+  const direction = Math.round(p.deviationPercent) > 0 ? ' delta-up' : Math.round(p.deviationPercent) < 0 ? ' delta-down' : '';
   return (
-    <p className="card-compare">
+    <p className={`card-compare${direction}`}>
       {percent(p.deviationPercent)} i forhold til median {kWh(p.baseline)}
     </p>
   );
@@ -38,7 +40,7 @@ export function PropertyCard({ p }: { p: PropertySummary }) {
         </>
       )}
 
-      <dl className="stats">
+      <dl className="stats stats-tiles">
         <div>
           <dt>Seneste 7 døgn</dt>
           <dd>{kWh(p.sum7)}</dd>
@@ -59,6 +61,8 @@ export function PropertyCard({ p }: { p: PropertySummary }) {
             height={44}
             ariaLabel={`Forbrug de seneste ${p.sparkline.length} komplette døgn, ${shortDate(p.sparkline[0].date)} til ${shortDate(p.sparkline[p.sparkline.length - 1].date)}`}
             bars={p.sparkline.map((d) => ({ key: d.date, label: '', title: longDate(d.date), value: d.kWh, state: 'complete' as const }))}
+            // The latest day stands out, so the bar can be tied to the large number above.
+            selectedKey={p.sparkline[p.sparkline.length - 1].date}
           />
           <p className="muted small">Seneste {p.sparkline.length} komplette døgn</p>
         </div>
@@ -94,8 +98,18 @@ export function Overview() {
   const alerts = useLoad(() => api.alerts('open'), 'alerts');
   const health = useLoad(() => api.health(), 'health');
 
+  const open = alerts.data?.length ?? 0;
+
   return (
     <>
+      <div className="page-head">
+        <h1>Oversigt</h1>
+        {alerts.data && (
+          <p className={open > 0 ? 'page-status page-status-open' : 'page-status'}>
+            {open === 0 ? 'Ingen aktive alarmer' : open === 1 ? '1 aktiv alarm' : `${open} aktive alarmer`}
+          </p>
+        )}
+      </div>
       {properties.error && <ErrorNote message={properties.error} onRetry={properties.reload} />}
       {health.data && <SourceNote health={health.data} />}
       {properties.loading && !properties.data && <p className="muted">Henter…</p>}
@@ -108,7 +122,10 @@ export function Overview() {
       )}
 
       <section>
-        <h2 className="section-title">Aktive alarmer</h2>
+        <h2 className="section-title">
+          Aktive alarmer
+          {open > 0 && <span className="count" aria-hidden="true">{open}</span>}
+        </h2>
         {alerts.error ? (
           <ErrorNote message={alerts.error} onRetry={alerts.reload} />
         ) : (
