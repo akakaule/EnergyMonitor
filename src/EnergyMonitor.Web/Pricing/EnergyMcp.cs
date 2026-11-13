@@ -82,25 +82,30 @@ public static class EnergyMcpSetup
     }
 }
 
+// Tools with an untyped result return their JSON as text and declare no output schema: the SDK would
+// otherwise announce {"$defs":{"output":true}}, which Claude Code rejects for the whole tool list.
 [McpServerToolType]
 public sealed class EnergyTools(EnergyQueryService queries)
 {
-    [McpServerTool(Name = "get_energy_overview", ReadOnly = true, UseStructuredContent = true), Description("Homes, consumption and costs. Dates YYYY-MM-DD inclusive, maximum 90 days.")]
+    [McpServerTool(Name = "get_energy_overview", ReadOnly = true), Description("Homes, consumption and costs. Dates YYYY-MM-DD inclusive, maximum 90 days.")]
     public Task<object> Overview(string from, string to, CancellationToken ct) => Safe(() => queries.OverviewAsync(from, to, ct));
 
-    [McpServerTool(Name = "get_consumption", ReadOnly = true, UseStructuredContent = true), Description("Consumption with data quality. Resolution day or interval. Maximum 90 inclusive Danish days.")]
+    [McpServerTool(Name = "get_consumption", ReadOnly = true), Description("Consumption with data quality. Resolution day or interval. Maximum 90 inclusive Danish days.")]
     public Task<object> Consumption(string propertyId, string from, string to, string resolution, CancellationToken ct) => Safe(() => queries.ConsumptionAsync(propertyId, from, to, resolution, ct));
 
     [McpServerTool(Name = "get_costs", ReadOnly = true, UseStructuredContent = true), Description("DKK cost components, known subtotal, coverage and estimates. Total is null if incomplete. Maximum 90 inclusive Danish days.")]
     public Task<CostResult> Costs(string propertyId, string from, string to, CancellationToken ct) => Safe(() => queries.CostsAsync(propertyId, from, to, ct));
 
-    [McpServerTool(Name = "compare_periods", ReadOnly = true, UseStructuredContent = true), Description("Compare consumption and costs with independent coverage. Each period at most 90 inclusive Danish days.")]
+    [McpServerTool(Name = "get_price_estimate", ReadOnly = true, UseStructuredContent = true), Description("Approximate DKK price incl. VAT (\"ca. pris\"), always with a total: hourly consumption x spot price, the supplier's registered markup and subscription, and the net tariffs, Energinet tariffs, electricity tax and subscriptions Eloverblik reports today, applied to the whole period. Components are excl. VAT plus a Vat component. 'assumptions' lists what is assumed (current_tariffs, supplier_markup_missing, supplier_subscription_missing, charges_missing). Maximum 90 inclusive Danish days.")]
+    public Task<ApproximateEstimate> Estimate(string propertyId, string from, string to, CancellationToken ct) => Safe(() => queries.EstimateAsync(propertyId, from, to, ct));
+
+    [McpServerTool(Name = "compare_periods", ReadOnly = true), Description("Compare consumption and costs with independent coverage. Each period at most 90 inclusive Danish days.")]
     public Task<object> Compare(string propertyId, string from, string to, string previousFrom, string previousTo, CancellationToken ct) => Safe(() => queries.CompareAsync(propertyId, from, to, previousFrom, previousTo, ct));
 
-    [McpServerTool(Name = "get_price_breakdown", ReadOnly = true, UseStructuredContent = true), Description("Registered agreement history, tariff rates and source status. Maximum 90 inclusive Danish days.")]
+    [McpServerTool(Name = "get_price_breakdown", ReadOnly = true), Description("Registered agreement history, tariff rates and source status. Maximum 90 inclusive Danish days.")]
     public Task<object> Breakdown(string propertyId, string from, string to, CancellationToken ct) => Safe(() => queries.BreakdownAsync(propertyId, from, to, ct));
 
-    [McpServerTool(Name = "get_data_status", ReadOnly = true, UseStructuredContent = true), Description("Missing data, coverage and last successful price sync. Maximum 90 inclusive Danish days.")]
+    [McpServerTool(Name = "get_data_status", ReadOnly = true), Description("Missing data, coverage and last successful price sync. Maximum 90 inclusive Danish days.")]
     public Task<object> Status(string propertyId, string from, string to, CancellationToken ct) => Safe(() => queries.StatusAsync(propertyId, from, to, ct));
 
     private static async Task<T> Safe<T>(Func<Task<T>> action)

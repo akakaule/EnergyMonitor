@@ -55,6 +55,67 @@ public class LocalModeTests
     }
 
     [Fact]
+    public async Task Mcp_ToolList_HasOnlyObjectOutputSchemas_SoClientsAcceptIt()
+    {
+        using var app = new AppFactory(pricing: true, mcp: true, local: true);
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+        var response = await client.PostAsJsonAsync("/mcp", new { jsonrpc = "2.0", id = 1, method = "tools/list" });
+        var text = await response.Content.ReadAsStringAsync();
+        if (text.StartsWith("event:", StringComparison.Ordinal))
+            text = text.Split('\n').First(line => line.StartsWith("data:", StringComparison.Ordinal))[5..].Trim();
+        using var json = System.Text.Json.JsonDocument.Parse(text);
+        var tools = json.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray().ToArray();
+
+        Assert.Equal(7, tools.Length);
+        // Claude Code rejects the whole list if any outputSchema is, or contains, a boolean schema such as
+        // {"$defs":{"output":true}} (what an untyped result produces). Such tools must not declare one.
+        static bool HasBooleanSchema(System.Text.Json.JsonElement e) => e.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False => true,
+            System.Text.Json.JsonValueKind.Object => e.EnumerateObject().Any(p => p.Name is not ("default" or "const" or "enum" or "examples") && HasBooleanSchema(p.Value)),
+            System.Text.Json.JsonValueKind.Array => e.EnumerateArray().Any(HasBooleanSchema),
+            _ => false,
+        };
+        Assert.All(tools, t =>
+        {
+            if (!t.TryGetProperty("outputSchema", out var schema)) return;
+            Assert.Equal(System.Text.Json.JsonValueKind.Object, schema.ValueKind);
+            Assert.False(HasBooleanSchema(schema), $"{t.GetProperty("name").GetString()} has a boolean subschema: {schema.GetRawText()}");
+        });
+    }
+
+    [Fact]
+    public async Task Mcp_GivesTheSameApproximatePrice_AsTheApp()
+    {
+        using var app = new AppFactory(pricing: true, mcp: true, local: true);
+        await app.SeedPropertiesAsync();
+        await app.SyncAsync();
+        var store = app.Get<EnergyMonitor.Web.Pricing.PricingStore>();
+        var start = DateTimeOffset.Parse("2026-10-31T23:00:00Z");
+        await store.SavePricesAsync([.. Enumerable.Range(0, 24).Select(h => new EnergyMonitor.Core.Pricing.SpotPrice("DK1", start.AddHours(h), start.AddHours(h + 1), 1m))], default);
+        await store.SaveChargeEvidenceAsync("hjem", "2026-11-01", ApproximatePricingTests.CurrentCharges, default);
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+        var call = await client.PostAsJsonAsync("/mcp", new { jsonrpc = "2.0", id = 1, method = "tools/call",
+            @params = new { name = "get_price_estimate", arguments = new { propertyId = "hjem", from = "2026-11-01", to = "2026-11-01" } } });
+        var text = await call.Content.ReadAsStringAsync();
+        if (text.StartsWith("event:", StringComparison.Ordinal))
+            text = text.Split('\n').First(line => line.StartsWith("data:", StringComparison.Ordinal))[5..].Trim();
+        using var json = System.Text.Json.JsonDocument.Parse(text);
+        var structured = json.RootElement.GetProperty("result").GetProperty("structuredContent");
+
+        var expected = await app.Get<EnergyMonitor.Web.Pricing.EnergyQueryService>().EstimateAsync("hjem", "2026-11-01", "2026-11-01", default);
+        Assert.True(expected.Total > 0);
+        Assert.Equal(expected.Total, structured.GetProperty("total").GetDecimal());
+        Assert.Contains("current_tariffs", structured.GetProperty("assumptions").EnumerateArray().Select(a => a.GetString()));
+    }
+
+    [Fact]
     public void DevelopmentSignIn_IsStillRefused_OutsideDevelopment()
     {
         using var app = new AppFactory().WithWebHostBuilder(b => b.UseEnvironment("Production"));

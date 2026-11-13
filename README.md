@@ -252,7 +252,7 @@ Not implemented, but the seams exist: `IMeasurementSource`, `INotificationChanne
 
 ## Electricity prices and read-only MCP
 
-Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and six `/mcp` tools share `EnergyQueryService` and the decimal calculator in Core.
+Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and seven `/mcp` tools (including `get_price_estimate`, the "ca. pris" estimate) share `EnergyQueryService` and the decimal calculator in Core.
 
 Enable `Pricing:Enabled` in dev to register dated agreements in Settings. `Mcp:Enabled` additionally requires `Mcp:Authority`, `Mcp:Audience`, `Mcp:Resource` (the public HTTPS `/mcp` URL) and a delegated `Mcp:ReadScope` (default `energy.read`). Browser sign-in cookies do not authorize MCP. The OAuth provider must issue signed access tokens for that audience, and the authenticated subject must also match the existing `Auth:Users` allowlist. Google browser ID tokens are not API access tokens for this resource.
 
