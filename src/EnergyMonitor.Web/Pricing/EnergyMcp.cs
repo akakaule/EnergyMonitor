@@ -12,6 +12,13 @@ public static class EnergyMcpSetup
     public static void AddEnergyMcp(this WebApplicationBuilder builder)
     {
         if (!builder.Configuration.GetValue<bool>("Mcp:Enabled")) return;
+        if (AuthSetup.IsNone(builder.Configuration))
+        {
+            // Without sign-in the app is private by network, and so is /mcp: no OAuth to configure.
+            builder.Services.AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithTools<EnergyTools>();
+            return;
+        }
+
         var authority = builder.Configuration["Mcp:Authority"];
         var audience = builder.Configuration["Mcp:Audience"];
         var resource = builder.Configuration["Mcp:Resource"];
@@ -55,6 +62,13 @@ public static class EnergyMcpSetup
         if (!app.Configuration.GetValue<bool>("Mcp:Enabled"))
         {
             app.Map("/mcp", () => Results.NotFound()).AllowAnonymous();
+            return;
+        }
+
+        if (AuthSetup.IsNone(app.Configuration))
+        {
+            app.Map("/.well-known/oauth-protected-resource/mcp", () => Results.NotFound()).AllowAnonymous();
+            app.MapMcp("/mcp").RequireAuthorization(AuthSetup.Viewer);
             return;
         }
         app.MapGet("/.well-known/oauth-protected-resource/mcp", () => new

@@ -17,8 +17,9 @@ Eloverblik Customer API        Telegram Bot API
    │  · rule engine and notification outbox     │
    │  · HTTP API + the built React PWA          │
    └──────┬──────────────────────────────────┘
-          │ managed identity
-   Azure Table Storage · Key Vault
+          │
+   SQLite file on a private Linux machine, reached through Tailscale
+   (Azure Table Storage and Key Vault are still supported, but not in use)
 ```
 
 | Path | What |
@@ -29,7 +30,8 @@ Eloverblik Customer API        Telegram Bot API
 | `src/EnergyMonitor.AppHost` | Aspire AppHost for local runs: Azurite, the app, and the fake upstreams. |
 | `tests/EnergyMonitor.Tests` | xUnit tests: domain, Eloverblik client, the whole pipeline in-process, API and authorization, storage contract. |
 | `tests/EnergyMonitor.FakeUpstreams` | A fake Eloverblik and Telegram with switchable scenarios, for tests and local runs. |
-| `infra` | Bicep for one resource group per environment. |
+| `deploy/local` | Docker Compose for the private Linux machine (in use). |
+| `infra` | Bicep for one Azure resource group per environment (not in use at the moment). |
 
 ## Deviations from the specification
 
@@ -107,6 +109,8 @@ The pipeline tests run the real application in-process with a controllable clock
 | `Sync:BackfillDays`, `Sync:RefetchDays` | Default 90 and 7 | App settings |
 | `ConnectionStrings:tables` | Table endpoint (managed identity) or an Azurite connection string | Bicep / Aspire |
 | `KeyVault:Uri` | When set, secrets are read from this vault and re-read every 30 minutes | Bicep |
+| `Auth:Mode` | `Oidc` (default), `None` (no sign-in; private network only) or `Development` (local runs) | App settings |
+| `Storage:Mode`, `Storage:Path` | `Tables` (default, Azure Table Storage/Azurite), `Sqlite` with a file path, or `InMemory` | App settings |
 
 Secrets exist only in Key Vault (or local user secrets). They are never sent to the browser, never part of an API response, and are kept out of logs: metering point ids are logged as their last four digits, and Telegram requests (whose URL contains the bot token) are excluded from HTTP logging and tracing. Tests assert this on captured log output.
 
@@ -138,7 +142,40 @@ Evaluated only on complete Danish calendar days. Defaults are starting values fo
 - The observed value, median, threshold and rule parameters are stored with the event as a snapshot.
 - A failed Telegram delivery stays in an outbox and is retried every minute for up to 72 hours. The event itself is not touched.
 
-## Deployment
+## Running on a private Linux machine (Tailscale)
+
+This is how the app runs since 13 November 2026. Azure hosting was retired; only the Key Vault was kept, as a copy of the secrets.
+
+The app has **no sign-in** (`Auth:Mode=None`): every request acts as the administrator, and `/mcp` (when enabled) is open too. It is private because Kestrel listens on `127.0.0.1` only and [`tailscale serve`](https://tailscale.com/kb/1312/serve) publishes it to your tailnet over HTTPS. Never expose port 8080 any other way, and do not use Tailscale Funnel.
+
+Requires Docker with Compose and Tailscale (with MagicDNS and HTTPS certificates enabled for the tailnet) on the machine.
+
+```sh
+git clone https://github.com/akakaule/EnergyMonitor.git && cd EnergyMonitor/deploy/local
+cp .env.example .env && chmod 600 .env     # fill in the tokens (see the comments in the file)
+mkdir -p data && sudo chown 1654 data      # 1654 is the app user inside the image
+# Moving from Azure: put the copied energymonitor.db into data/ first (see below)
+docker compose up -d --build
+sudo tailscale serve --bg 8080             # https://<machine>.<tailnet>.ts.net
+```
+
+- **Storage** is one SQLite file, `deploy/local/data/energymonitor.db` (`Storage:Mode=Sqlite`, `Storage:Path`).
+- **Backup**: copy the file while the app runs with `sqlite3 data/energymonitor.db ".backup 'backup.db'"` (e.g. nightly from cron to another disk), or use Indstillinger → *Hent eksport*.
+- **Update**: `git pull && docker compose up -d --build`.
+- **Logs**: `docker compose logs -f`.
+- **MCP from Claude Code** on a machine in the tailnet: set `Mcp__Enabled=true` in `.env`, restart, then `claude mcp add --transport http energy-monitor https://<machine>.<tailnet>.ts.net/mcp`. Claude.ai connectors cannot reach a tailnet.
+
+**Moving data off Azure Table Storage** (one time): with `az login` and the *Storage Table Data Reader* role on the account, run
+
+```sh
+dotnet run --project src/EnergyMonitor.Web -c Release -- copy-tables --from https://<account>.table.core.windows.net --to energymonitor.db
+```
+
+It copies every `em*` table into a new SQLite file and prints the row count per table. It refuses a file that already holds data.
+
+## Deployment to Azure (not in use)
+
+The Bicep and the Deploy workflow are kept for later; the steps below describe the setup that ran until 13 November 2026.
 
 A `dev` environment was deployed from a workstation on 10 November 2026 using the Azure Container Registry variant described under *Deploying from a workstation* below. The **Deploy** workflow (GHCR) has not been run.
 

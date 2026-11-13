@@ -13,3 +13,7 @@ __azurite*
 __blobstorage__/
 __queuestorage__/
 *.local
+
+# Local Linux installation: secrets and the database
+deploy/local/.env
+deploy/local/data/

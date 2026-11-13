@@ -291,3 +291,73 @@ public class AzuriteStorageTests : StorageContract
         Assert.Equal(2, (await second.Get<IPropertyStore>().ListAsync(default)).Count);
     }
 }
+
+public sealed class SqliteStorageTests : StorageContract, IDisposable
+{
+    private readonly string _folder = Directory.CreateTempSubdirectory("em-sqlite-").FullName;
+
+    private string File(string name = "energymonitor.db") => Path.Combine(_folder, name);
+
+    protected override ITableBackend CreateBackend() => new SqliteTableBackend(File(Guid.NewGuid().ToString("N") + ".db"));
+
+    [Fact]
+    public async Task Restart_AgainstSqliteFile_LosesNoData_AndRepeatsNothing()
+    {
+        var path = File();
+        var fake = new FakeState();
+        var time = new FakeTimeProvider(AppFactory.Start);
+        var latest = new DateOnly(2026, 11, 6);
+        fake.DayFactors[(FakeState.Sommerhus, latest)] = 0.15;
+
+        using (var first = new AppFactory(new SqliteTableBackend(path), fake, time))
+        {
+            await first.SeedPropertiesAsync();
+            await first.Get<SchedulerService>().TickAsync(default);
+            time.Advance(TimeSpan.FromMinutes(56));
+            await first.Get<SchedulerService>().TickAsync(default);
+            Assert.Equal(2, first.Telegrams.Count);
+        }
+
+        // A second application instance over the same file: nothing but the file is shared.
+        using var second = new AppFactory(new SqliteTableBackend(path), fake, time);
+        await second.Get<SchedulerService>().TickAsync(default);
+        await second.SyncAsync();
+
+        Assert.Equal(2, second.Telegrams.Count);
+        var e = Assert.Single(await second.EventsAsync());
+        Assert.Equal((RuleType.LowConsumption, AlertSeverity.Observer, latest), (e.RuleType, e.Severity, e.FirstLocalDate));
+        var days = await second.Get<IConsumptionStore>().GetDailyAsync("sommerhus", latest.AddDays(-100), latest.AddDays(5), default);
+        Assert.Equal(89, days.Count(d => d.IsComplete));
+        Assert.Equal(2, (await second.Get<IPropertyStore>().ListAsync(default)).Count);
+    }
+
+    [Fact]
+    public async Task Copy_MovesEveryRowOfEveryTable_WithKeysJsonAndTags()
+    {
+        var source = new InMemoryTableBackend();
+        await source.UpsertAsync("properties", [new Row("p", "hus", "{\"name\":\"Hus\"}"), new Row("p", "sommerhus", "{}")], default);
+        await source.UpsertAsync("alerts", [new Row("hus", "2026-11-11", "{\"x\":1}", Tag: "open")], default);
+        var target = new SqliteTableBackend(File());
+
+        var counts = await TableCopy.CopyAsync(source, target, ["properties", "alerts", "empty"], default);
+
+        Assert.Equal(new Dictionary<string, int> { ["properties"] = 2, ["alerts"] = 1, ["empty"] = 0 }, counts);
+        Assert.Equal(new Row("hus", "2026-11-11", "{\"x\":1}", "open"), await target.GetAsync("alerts", "hus", "2026-11-11", default));
+        Assert.Equal(2, (await target.QueryAsync("properties", "p", null, null, null, default)).Count);
+    }
+
+    [Fact]
+    public async Task Copy_RefusesATargetThatAlreadyHoldsData()
+    {
+        var target = new SqliteTableBackend(File());
+        await target.UpsertAsync("state", [new Row("state", "k", "{}")], default);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => TableCopy.CopyAsync(new InMemoryTableBackend(), target, ["state"], default));
+    }
+
+    public void Dispose()
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(_folder, recursive: true);
+    }
+}

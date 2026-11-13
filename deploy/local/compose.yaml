@@ -1,0 +1,26 @@
+# Energy Monitor on a private Linux machine, reached only through Tailscale.
+# See README, "Kør på en Linux-maskine med Tailscale".
+#
+#   cp .env.example .env    # fill in the secrets
+#   docker compose up -d --build
+#   sudo tailscale serve --bg 8080
+
+services:
+  energymonitor:
+    build:
+      context: ../..
+    image: energy-monitor:local
+    restart: unless-stopped
+    # Host networking with Kestrel bound to 127.0.0.1: nothing but this machine (and `tailscale serve`
+    # on it) can reach the app. The app has no sign-in, so never publish this port any other way.
+    network_mode: host
+    env_file: .env
+    environment:
+      ASPNETCORE_URLS: http://127.0.0.1:8080
+      # No proxy in front that could be trusted to report client addresses.
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "false"
+      Auth__Mode: None
+      Storage__Mode: Sqlite
+      Storage__Path: /data/energymonitor.db
+    volumes:
+      - ./data:/data

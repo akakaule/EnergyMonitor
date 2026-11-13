@@ -14,7 +14,15 @@ public sealed class AuthOptions
     public const string ModeOidc = "Oidc";
     public const string ModeDevelopment = "Development";
 
-    /// <summary><c>Oidc</c> (default) or <c>Development</c>. Development is refused outside the Development environment.</summary>
+    /// <summary>
+    /// No sign-in: every request acts as the administrator. Only for a private installation that nobody else
+    /// can reach, such as a machine published to a Tailscale tailnet on its loopback interface.
+    /// </summary>
+    public const string ModeNone = "None";
+
+    /// <summary>
+    /// <c>Oidc</c> (default), <c>None</c> or <c>Development</c>. Development is refused outside the Development environment.
+    /// </summary>
     public string Mode { get; set; } = ModeOidc;
 
     /// <summary>OIDC authority, e.g. https://accounts.google.com or https://login.microsoftonline.com/{tenant}/v2.0.</summary>
@@ -55,6 +63,11 @@ public sealed class Allowlist(IOptionsMonitor<AuthOptions> options)
         if (principal.Identity?.IsAuthenticated != true)
         {
             return null;
+        }
+
+        if (string.Equals(options.CurrentValue.Mode, AuthOptions.ModeNone, StringComparison.OrdinalIgnoreCase))
+        {
+            return new User(LocalAuthHandler.Subject, LocalAuthHandler.DisplayName, UserRoles.Admin);
         }
 
         var subjects = principal.Claims
@@ -128,6 +141,24 @@ public sealed class DevAuthHandler(
     }
 }
 
+/// <summary>Sign-in for <see cref="AuthOptions.ModeNone"/>: every request is the local administrator.</summary>
+public sealed class LocalAuthHandler(
+    IOptionsMonitor<AuthenticationSchemeOptions> schemeOptions,
+    ILoggerFactory logger,
+    UrlEncoder encoder)
+    : AuthenticationHandler<AuthenticationSchemeOptions>(schemeOptions, logger, encoder)
+{
+    public const string SchemeName = "Local";
+    public const string Subject = "local";
+    public const string DisplayName = "Lokal";
+
+    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    {
+        var identity = new ClaimsIdentity([new Claim("sub", Subject), new Claim("name", DisplayName)], SchemeName, "name", null);
+        return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName)));
+    }
+}
+
 public static class AuthSetup
 {
     public const string Viewer = "viewer";
@@ -145,6 +176,13 @@ public static class AuthSetup
             .AddPolicy(Admin, p => p.RequireAuthenticatedUser().AddRequirements(new RoleRequirement(adminOnly: true)));
 
         var auth = builder.Configuration.GetSection("Auth").Get<AuthOptions>() ?? new AuthOptions();
+        if (IsNone(builder.Configuration))
+        {
+            builder.Services.AddAuthentication(LocalAuthHandler.SchemeName)
+                .AddScheme<AuthenticationSchemeOptions, LocalAuthHandler>(LocalAuthHandler.SchemeName, null);
+            return;
+        }
+
         if (string.Equals(auth.Mode, AuthOptions.ModeDevelopment, StringComparison.OrdinalIgnoreCase))
         {
             if (!builder.Environment.IsDevelopment())
@@ -194,9 +232,19 @@ public static class AuthSetup
             });
     }
 
+    /// <summary>True when the app runs without sign-in (<see cref="AuthOptions.ModeNone"/>).</summary>
+    public static bool IsNone(IConfiguration configuration) =>
+        string.Equals(configuration["Auth:Mode"], AuthOptions.ModeNone, StringComparison.OrdinalIgnoreCase);
+
     public static void MapAuthEndpoints(this WebApplication app)
     {
-        var dev = string.Equals(app.Configuration["Auth:Mode"], AuthOptions.ModeDevelopment, StringComparison.OrdinalIgnoreCase);
+        var none = IsNone(app.Configuration);
+        if (none)
+        {
+            app.Logger.LogWarning("Auth:Mode=None: there is no sign-in and every request acts as the administrator. Keep the app reachable only on a private network.");
+        }
+
+        var dev = none || string.Equals(app.Configuration["Auth:Mode"], AuthOptions.ModeDevelopment, StringComparison.OrdinalIgnoreCase);
 
         app.MapGet("/auth/login", (string? returnUrl) =>
         {

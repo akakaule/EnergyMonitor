@@ -76,9 +76,9 @@ public sealed class AppFactory : WebApplicationFactory<Program>
 
     private readonly WebApplication _fake;
 
-    public AppFactory(ITableBackend? backend = null, FakeState? fake = null, FakeTimeProvider? time = null, bool pricing = false, bool mcp = false)
+    public AppFactory(ITableBackend? backend = null, FakeState? fake = null, FakeTimeProvider? time = null, bool pricing = false, bool mcp = false, bool local = false)
     {
-        Pricing = pricing; Mcp = mcp;
+        Pricing = pricing; Mcp = mcp; Local = local;
         Backend = backend ?? new InMemoryTableBackend();
         Time = time ?? new FakeTimeProvider(Start);
         Fake = fake ?? new FakeState();
@@ -95,6 +95,9 @@ public sealed class AppFactory : WebApplicationFactory<Program>
 
     private bool Pricing { get; }
     private bool Mcp { get; }
+
+    /// <summary>Runs as on the private Linux machine: Production environment, no sign-in, no OAuth for MCP.</summary>
+    private bool Local { get; }
     public ITableBackend Backend { get; }
 
     public FakeTimeProvider Time { get; }
@@ -110,15 +113,19 @@ public sealed class AppFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseEnvironment("Development");
+        builder.UseEnvironment(Local ? "Production" : "Development");
         builder.UseSetting("Pricing:Enabled", Pricing.ToString());
         builder.UseSetting("Mcp:Enabled", Mcp.ToString());
-        builder.UseSetting("Mcp:Authority", "https://issuer.test");
-        builder.UseSetting("Mcp:Audience", "energy");
-        builder.UseSetting("Mcp:Resource", "https://energy.test/mcp");
+        if (!Local)
+        {
+            builder.UseSetting("Mcp:Authority", "https://issuer.test");
+            builder.UseSetting("Mcp:Audience", "energy");
+            builder.UseSetting("Mcp:Resource", "https://energy.test/mcp");
+        }
+
         builder.UseSetting("Storage:Mode", "InMemory");
         builder.UseSetting("Schedule:Enabled", "false");
-        builder.UseSetting("Auth:Mode", AuthOptions.ModeDevelopment);
+        builder.UseSetting("Auth:Mode", Local ? AuthOptions.ModeNone : AuthOptions.ModeDevelopment);
         builder.UseSetting("Auth:DevUser", "");
         builder.UseSetting("Auth:Users:0:Subject", Admin);
         builder.UseSetting("Auth:Users:0:Role", UserRoles.Admin);

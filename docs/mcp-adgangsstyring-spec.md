@@ -1,6 +1,8 @@
 # Adgangsstyring for MCP i web-UI'et — specifikation (udkast)
 
-Status: udkast til gennemgang, 13. november 2026. Intet er implementeret.
+Status: **parkeret**, 13. november 2026. Intet er implementeret.
+
+Løsningen kører nu kun på en privat Linux-maskine, der nås via Tailscale, uden login (`Auth:Mode=None`). Her er `/mcp` åben for alle i tailnettet, og nøgler er ikke nødvendige. Specifikationen tages op igen, hvis løsningen igen skal kunne nås udefra, f.eks. fra Claude.ai.
 
 ## 1. Baggrund
 

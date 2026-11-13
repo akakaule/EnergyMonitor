@@ -15,6 +15,11 @@ using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 
+if (args is ["copy-tables", ..])
+{
+    return await CopyTablesAsync(args);
+}
+
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
@@ -43,10 +48,19 @@ builder.Services.Configure<ScheduleOptions>(builder.Configuration.GetSection("Sc
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddSingleton(TimeProvider.System);
 
-if (string.Equals(builder.Configuration["Storage:Mode"], "InMemory", StringComparison.OrdinalIgnoreCase))
+var storageMode = builder.Configuration["Storage:Mode"];
+if (string.Equals(storageMode, "InMemory", StringComparison.OrdinalIgnoreCase))
 {
     // Tests and quick local runs only: nothing survives a restart.
     builder.Services.AddSingleton<ITableBackend, InMemoryTableBackend>();
+}
+else if (string.Equals(storageMode, "Sqlite", StringComparison.OrdinalIgnoreCase))
+{
+    // A single private machine: everything in one file (Storage:Path), backed up by copying that file.
+    var path = builder.Configuration["Storage:Path"] is { Length: > 0 } configured
+        ? configured
+        : throw new InvalidOperationException("Storage:Path must be set when Storage:Mode is Sqlite.");
+    builder.Services.AddSingleton<ITableBackend>(new SqliteTableBackend(path));
 }
 else
 {
@@ -142,5 +156,40 @@ app.MapFallback("/api/{**rest}", () => Results.NotFound()).AllowAnonymous();
 app.MapFallbackToFile("index.html").AllowAnonymous();
 
 app.Run();
+return 0;
+
+/// <summary>
+/// One-time move off Azure: <c>copy-tables --from https://account.table.core.windows.net --to energymonitor.db</c>.
+/// Signs in with the developer's Azure credentials and copies every table of the app into a new SQLite file.
+/// </summary>
+static async Task<int> CopyTablesAsync(string[] args)
+{
+    string? Option(string name) => args.SkipWhile(a => a != name).Skip(1).FirstOrDefault();
+    if (Option("--from") is not { Length: > 0 } from || Option("--to") is not { Length: > 0 } to)
+    {
+        Console.Error.WriteLine("Usage: copy-tables --from <table endpoint URL> --to <new SQLite file>");
+        return 2;
+    }
+
+    const string prefix = "em";
+    var service = new Azure.Data.Tables.TableServiceClient(new Uri(from), new DefaultAzureCredential());
+    var tables = new List<string>();
+    await foreach (var table in service.QueryAsync(filter: (string?)null))
+    {
+        if (table.Name.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            tables.Add(table.Name[prefix.Length..]);
+        }
+    }
+
+    var counts = await TableCopy.CopyAsync(new AzureTableBackend(service, prefix), new SqliteTableBackend(to), tables, CancellationToken.None);
+    foreach (var (table, count) in counts.OrderBy(c => c.Key, StringComparer.Ordinal))
+    {
+        Console.WriteLine($"{prefix}{table}	{count}");
+    }
+
+    Console.WriteLine($"{counts.Values.Sum()} rows in {counts.Count} tables copied to {Path.GetFullPath(to)}");
+    return 0;
+}
 
 public partial class Program;

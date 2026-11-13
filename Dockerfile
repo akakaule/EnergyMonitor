@@ -27,6 +27,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app ./
+# Data folder for Storage:Mode=Sqlite (deploy/local mounts it).
+RUN mkdir -p /data && chown "$APP_UID" /data
 ENV ASPNETCORE_HTTP_PORTS=8080 \
     ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
 EXPOSE 8080
