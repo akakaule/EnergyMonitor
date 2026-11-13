@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { PricingSettings } from './Pricing';
 import { api, errorText, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
-import { ErrorNote, StatusBadge, useLoad } from './common';
+import { ErrorNote, StatusBadge, useLoad, type Loaded } from './common';
 import { dateTime } from './format';
 
 type Result = { ok: boolean; text: string } | null;
@@ -112,8 +112,7 @@ function PanelHead({ title, about, children }: { title: string; about?: ReactNod
   );
 }
 
-function Operations({ admin, hidden }: { admin: boolean; hidden: boolean }) {
-  const health = useLoad(() => api.health(), 'health');
+function Operations({ admin, health, hidden }: { admin: boolean; health: Loaded<Health>; hidden: boolean }) {
   const [result, busy, run] = useAction();
   const h = health.data;
 
@@ -470,14 +469,72 @@ function NotificationForm({ initial }: { initial: NotificationSettings }) {
   );
 }
 
-function MenuLink({ section, active, children }: { section: string; active: string; children: ReactNode }) {
-  return <a href={sectionHref(section)} aria-current={section === active ? 'page' : undefined}>{children}</a>;
+const ICONS = {
+  drift: <path d="M3 12h4l2.5-6 5 12 2.5-6H21" />,
+  bell: (
+    <>
+      <path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z" />
+      <path d="M10 20.5a2.2 2.2 0 0 0 4 0" />
+    </>
+  ),
+  house: (
+    <>
+      <path d="M4 11.5 12 4.5l8 7" />
+      <path d="M6.5 9.8V19.5h11V9.8" />
+      <path d="M10.2 19.5v-5h3.6v5" />
+    </>
+  ),
+  plus: <path d="M12 6v12M6 12h12" />,
+};
+
+/** The coloured dot repeats what the second line says in words, so colour is never the only signal. */
+interface MenuState { text: string; tone?: Tone }
+
+function MenuLink({ section, active, icon, label, state }: { section: string; active: string; icon: keyof typeof ICONS; label: string; state?: MenuState }) {
+  return (
+    <a href={sectionHref(section)} aria-current={section === active ? 'page' : undefined}>
+      <span className={icon === 'plus' ? 'nav-icon nav-icon-add' : 'nav-icon'} aria-hidden="true">
+        <svg viewBox="0 0 24 24">{ICONS[icon]}</svg>
+        {state?.tone && <span className={`nav-dot nav-dot-${state.tone}`} />}
+      </span>
+      <span className="nav-text">
+        <span className="nav-label">{label}</span>
+        {state && <>{' '}<span className="nav-sub">{state.text}</span></>}
+      </span>
+    </a>
+  );
+}
+
+function driftState(h: Health | null): MenuState | undefined {
+  if (!h) return undefined;
+  if (h.token.state === 'missing' || h.token.state === 'expired') return { text: 'Adgangsnøglen skal fornyes', tone: 'error' };
+  if (h.syncRunning || h.lastSync?.status === 'Running') return { text: 'Synkroniserer…', tone: 'neutral' };
+  if (h.lastSync?.status === 'Failed') return { text: 'Synkronisering fejlede', tone: 'error' };
+  if (h.token.state === 'expiring') return { text: `Adgangsnøglen udløber om ${h.token.daysLeft} dage`, tone: 'warn' };
+  return { text: h.lastSuccessfulSyncUtc ? `Synkroniseret ${dateTime(h.lastSuccessfulSyncUtc)}` : 'Ikke synkroniseret endnu' };
+}
+
+function notificationState(h: Health | null): MenuState | undefined {
+  if (!h) return undefined;
+  if (!h.notifications.configured) return { text: 'Ikke sat op', tone: 'warn' };
+  if (h.notifications.pending > 0) return { text: `${h.notifications.pending} afventer afsendelse`, tone: 'warn' };
+  return { text: 'Telegram er sat op' };
+}
+
+const STATUS_TONE: Record<PropertySummary['status'], Tone> = { Normal: 'ok', Observer: 'warn', Alarm: 'error', DataMissing: 'neutral' };
+
+function propertyState(p: PropertySummary): MenuState {
+  if (!p.monitoringEnabled) return { text: 'På pause', tone: 'neutral' };
+  if (!p.hasMeteringPoint) return { text: 'Intet målepunkt', tone: 'neutral' };
+  return { text: `${p.statusLabel} · ${p.meteringPoint}`, tone: STATUS_TONE[p.status] };
 }
 
 export function Settings({ me, section }: { me: Me; section?: string }) {
   const features = useLoad(() => api.features(), 'features');
   const admin = me.role === 'admin';
   const properties = useLoad(() => api.properties(), 'properties');
+  // Loaded once here: the Drift panel shows it in full, the menu summarises it.
+  const health = useLoad(() => api.health(), 'health');
   const [pointList, setPointList] = useState<MeteringPoint[] | null>(null);
   const [pointsResult, loadingPoints, runPoints] = useAction();
   // A property that was just created is not in the list until it has been fetched again.
@@ -515,19 +572,18 @@ export function Settings({ me, section }: { me: Me; section?: string }) {
         {admin && (
           <nav className="settings-nav" aria-label="Indstillinger" ref={menu}>
             <p className="nav-group">System</p>
-            <MenuLink section={DRIFT} active={active}>Drift</MenuLink>
-            <MenuLink section={NOTIFICATIONS} active={active}>Notifikationer</MenuLink>
+            <MenuLink section={DRIFT} active={active} icon="drift" label="Drift" state={driftState(health.data)} />
+            <MenuLink section={NOTIFICATIONS} active={active} icon="bell" label="Notifikationer" state={notificationState(health.data)} />
             <p className="nav-group">Ejendomme</p>
-            {list?.map((p) => <MenuLink key={p.id} section={propertySection(p.id)} active={active}>{p.name}</MenuLink>)}
-            <MenuLink section={NEW_PROPERTY} active={active}>
-              <span className="nav-plus" aria-hidden="true">+</span>
-              Ny ejendom
-            </MenuLink>
+            {list?.map((p) => (
+              <MenuLink key={p.id} section={propertySection(p.id)} active={active} icon="house" label={p.name} state={propertyState(p)} />
+            ))}
+            <MenuLink section={NEW_PROPERTY} active={active} icon="plus" label="Ny ejendom" />
           </nav>
         )}
         <div className="settings-body">
           {admin && properties.error && <ErrorNote message={properties.error} onRetry={properties.reload} />}
-          <Operations admin={admin} hidden={active !== DRIFT} />
+          <Operations admin={admin} health={health} hidden={active !== DRIFT} />
           {!admin && <p className="note note-info">Du er logget ind som læser. Kun administratorer kan ændre indstillinger.</p>}
           {admin && (
             <>

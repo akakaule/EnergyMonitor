@@ -777,11 +777,12 @@ input[type='checkbox'] {
 
 .field-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .field-row select {
-  flex: 1;
+  flex: 1 1 160px;
   min-width: 0;
 }
 
@@ -900,7 +901,7 @@ input[type='checkbox'] {
 
 .settings {
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
   gap: 32px;
   align-items: start;
 }
@@ -909,16 +910,16 @@ input[type='checkbox'] {
   position: sticky;
   top: 16px;
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
 .settings-nav a {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px 12px;
-  border-radius: 8px;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border-radius: 10px;
   color: var(--ink-2);
   text-decoration: none;
 }
@@ -947,16 +948,88 @@ input[type='checkbox'] {
   margin-top: 0;
 }
 
-.nav-plus {
+.nav-icon {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--ink-2);
+}
+
+.nav-icon svg {
   width: 18px;
   height: 18px;
-  flex: none;
-  border-radius: 50%;
-  display: inline-grid;
-  place-items: center;
-  line-height: 1;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.nav-icon-add {
+  background: transparent;
   box-shadow: inset 0 0 0 1px var(--axis);
-  color: var(--ink-2);
+}
+
+.settings-nav a[aria-current='page'] .nav-icon {
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: none;
+}
+
+.nav-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 2px var(--page);
+}
+
+.settings-nav a:hover .nav-dot {
+  box-shadow: 0 0 0 2px var(--inset);
+}
+
+.settings-nav a[aria-current='page'] .nav-dot {
+  box-shadow: 0 0 0 2px var(--wash-info);
+}
+
+.nav-dot-ok {
+  background: var(--good);
+}
+
+.nav-dot-warn {
+  background: var(--warning);
+}
+
+.nav-dot-error {
+  background: var(--critical);
+}
+
+.nav-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.nav-label,
+.nav-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-sub {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .settings-body {
@@ -1106,7 +1179,7 @@ input[type='checkbox'] {
   margin: 0;
 }
 
-@media (max-width: 800px) {
+@media (max-width: 900px) {
   .settings {
     grid-template-columns: minmax(0, 1fr);
     gap: 16px;
@@ -1131,6 +1204,7 @@ input[type='checkbox'] {
 
   .settings-nav a {
     flex: none;
+    gap: 6px;
     padding: 6px 14px;
     border-radius: 999px;
     background: var(--surface);
@@ -1144,9 +1218,34 @@ input[type='checkbox'] {
     box-shadow: none;
   }
 
-  .settings-nav a[aria-current='page'] .nav-plus {
+  /* On a phone the tile shrinks to a plain icon and the second line is left out. */
+  .settings-nav a .nav-icon,
+  .settings-nav a[aria-current='page'] .nav-icon {
+    width: auto;
+    height: auto;
+    background: none;
+    box-shadow: none;
     color: inherit;
-    box-shadow: inset 0 0 0 1px currentColor;
+  }
+
+  .nav-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .nav-dot,
+  .settings-nav a[aria-current='page'] .nav-dot {
+    width: 8px;
+    height: 8px;
+    box-shadow: 0 0 0 2px var(--surface);
+  }
+
+  .settings-nav a[aria-current='page'] .nav-dot {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  .nav-sub {
+    display: none;
   }
 
   .nav-group {

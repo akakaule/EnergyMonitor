@@ -53,15 +53,39 @@ describe('Settings', () => {
     render(<Settings me={admin} />);
 
     const menu = within(await screen.findByRole('navigation', { name: 'Indstillinger' }));
-    await waitFor(() => expect(menu.getByRole('link', { name: 'Hus' })).toBeTruthy());
-    expect(menu.getByRole('link', { name: 'Drift' }).getAttribute('aria-current')).toBe('page');
-    expect(menu.getByRole('link', { name: 'Notifikationer' }).getAttribute('href')).toBe('#/indstillinger/notifikationer');
-    expect(menu.getByRole('link', { name: 'Sommerhus' }).getAttribute('href')).toBe('#/indstillinger/ejendom/sommerhus');
+    await waitFor(() => expect(menu.getByRole('link', { name: /^Hus/ })).toBeTruthy());
+    expect(menu.getByRole('link', { name: /^Drift/ }).getAttribute('aria-current')).toBe('page');
+    expect(menu.getByRole('link', { name: /^Notifikationer/ }).getAttribute('href')).toBe('#/indstillinger/notifikationer');
+    expect(menu.getByRole('link', { name: /^Sommerhus/ }).getAttribute('href')).toBe('#/indstillinger/ejendom/sommerhus');
     expect(menu.getByRole('link', { name: 'Ny ejendom' })).toBeTruthy();
 
     expect(panelTitle('Drift')).toBeTruthy();
     expect(panelTitle('Notifikationer')).toBeNull();
     expect(panelTitle('Hus')).toBeNull();
+  });
+
+  it('shows the state of each section under its name in the menu, loading the status once', async () => {
+    vi.mocked(api.properties).mockResolvedValue([
+      { ...property('sommerhus', 'Sommerhus'), monitoringEnabled: false },
+      { ...property('hus', 'Hus'), status: 'Observer', statusLabel: 'Observer', meteringPoint: '…0980' },
+      { ...property('ny', 'Ny'), hasMeteringPoint: false, meteringPoint: '' },
+    ]);
+    render(<Settings me={admin} />);
+
+    const menu = within(await screen.findByRole('navigation', { name: 'Indstillinger' }));
+    await waitFor(() => expect(menu.getByRole('link', { name: 'Hus Observer · …0980' })).toBeTruthy());
+    expect(menu.getByRole('link', { name: 'Sommerhus På pause' })).toBeTruthy();
+    expect(menu.getByRole('link', { name: 'Ny Intet målepunkt' })).toBeTruthy();
+    expect(menu.getByRole('link', { name: 'Notifikationer Ikke sat op' })).toBeTruthy();
+    expect(menu.getByRole('link', { name: 'Drift Synkroniseret 8/11 kl. 08:06' })).toBeTruthy();
+    expect(api.health).toHaveBeenCalledTimes(1);
+  });
+
+  it('flags a failed sync in the menu', async () => {
+    vi.mocked(api.health).mockResolvedValue({ ...health, lastSync: { ...health.lastSync!, status: 'Failed', errorCode: 'http_503' } });
+    render(<Settings me={admin} />);
+
+    expect(await screen.findByRole('link', { name: 'Drift Synkronisering fejlede' })).toBeTruthy();
   });
 
   it('shows only the selected section', async () => {
@@ -90,7 +114,7 @@ describe('Settings', () => {
   it('falls back to Drift for a section that does not exist', async () => {
     render(<Settings me={admin} section="ejendom/findes-ikke" />);
 
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Hus' })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('link', { name: /^Hus/ })).toBeTruthy());
     expect(panelTitle('Drift')).toBeTruthy();
   });
 
