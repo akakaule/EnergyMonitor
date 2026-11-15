@@ -200,7 +200,8 @@ public static partial class Endpoints
             var p = update.Params;
             if (p is null || p.ThresholdPercent is < 0 or > 1000 || p.MinBaselineKWh is < 0 or > 1000
                 || p.BaselineDays is < 1 or > 60 || p.MinBaselineDays < 1 || p.MinBaselineDays > p.BaselineDays
-                || p.EscalateAfterDays is < 1 or > 30 || p.MissingHours is < 24 or > 720 || p.ConsecutiveFailures is < 1 or > 20)
+                || p.EscalateAfterDays is < 1 or > 30 || p.MissingHours is < 24 or > 720 || p.ConsecutiveFailures is < 1 or > 20
+                || p.MinTemperatureC is < -20 or > 30 || p.SustainedMinutes is < 0 or > 1440 || p.OfflineMinutes is < 15 or > 1440)
             {
                 return Results.BadRequest(new { error = "invalid_params" });
             }
@@ -447,7 +448,7 @@ public static partial class Endpoints
         e.RuleType switch
         {
             RuleType.MissingData => "Data mangler",
-            RuleType.SourceFailure or RuleType.TokenExpiry => "Teknisk",
+            RuleType.SourceFailure or RuleType.TokenExpiry or RuleType.SensiboFailure => "Teknisk",
             _ => e.Severity == AlertSeverity.Alarm ? "Alarm" : "Observer",
         },
         e.FirstLocalDate, e.LastLocalDate, e.Observed, e.Baseline, e.Threshold, e.Explanation,

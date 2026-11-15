@@ -74,6 +74,15 @@ public enum RuleType
     MissingData,
     SourceFailure,
     TokenExpiry,
+
+    /// <summary>Heat pump: the indoor temperature is below the frost limit.</summary>
+    IndoorTooCold,
+
+    /// <summary>Heat pump: the device has lost its connection to Sensibo.</summary>
+    HeatPumpOffline,
+
+    /// <summary>System: Sensibo cannot be reached or rejects the API key.</summary>
+    SensiboFailure,
 }
 
 /// <summary>Parameters of a rule. Only the fields relevant to the rule type are used.</summary>
@@ -98,6 +107,15 @@ public sealed record RuleParams
     /// <summary>Source failure: consecutive failed sync runs.</summary>
     public int ConsecutiveFailures { get; init; } = 3;
 
+    /// <summary>Indoor too cold: raised below this temperature, closed again at this plus <c>HeatPumpRules.HysteresisC</c>.</summary>
+    public double MinTemperatureC { get; init; } = 5;
+
+    /// <summary>Indoor too cold escalates from Observer to Alarm after this many minutes.</summary>
+    public int SustainedMinutes { get; init; } = 120;
+
+    /// <summary>Heat pump offline: minutes since the device was last seen by Sensibo.</summary>
+    public int OfflineMinutes { get; init; } = 60;
+
     public static RuleParams DefaultFor(RuleType type) => type switch
     {
         RuleType.LowConsumption => new RuleParams { ThresholdPercent = 50 },
@@ -118,6 +136,10 @@ public sealed record AlertRule(
     public static readonly IReadOnlyList<RuleType> PropertyRuleTypes =
         [RuleType.LowConsumption, RuleType.HighConsumption, RuleType.MissingData];
 
+    /// <summary>The extra rule types of a property with a linked heat pump.</summary>
+    public static readonly IReadOnlyList<RuleType> HeatPumpRuleTypes =
+        [RuleType.IndoorTooCold, RuleType.HeatPumpOffline];
+
     public static AlertRule Default(string propertyId, RuleType type, DateTimeOffset now) =>
         new(type.ToString(), propertyId, type, true, RuleParams.DefaultFor(type), now);
 }
@@ -135,8 +157,10 @@ public enum AlertState
 }
 
 /// <summary>
-/// An alert event, unique on (property, rule type, first affected day). The observed value, baseline,
+/// An alert event, unique on (property, rule type, first affected day, sequence). The observed value, baseline,
 /// threshold and parameters are a snapshot taken when the event was raised or last escalated.
+/// <see cref="Sequence"/> is 0 except for rules evaluated within the day (the heat pump), where a second
+/// event on the same day gets 1, 2, …
 /// </summary>
 public sealed record AlertEvent(
     string PropertyId,
@@ -155,31 +179,34 @@ public sealed record AlertEvent(
     DateTimeOffset? AcknowledgedAtUtc = null,
     DateTimeOffset? LastNotifiedAtUtc = null,
     AlertSeverity? LastNotifiedSeverity = null,
-    DateTimeOffset? ClosedAtUtc = null)
+    DateTimeOffset? ClosedAtUtc = null,
+    int Sequence = 0)
 {
     /// <summary>Property id used for events about the data source itself.</summary>
     public const string SystemPropertyId = "system";
 
     [JsonIgnore]
-    public string Id => MakeId(PropertyId, RuleType, FirstLocalDate);
+    public string Id => MakeId(PropertyId, RuleType, FirstLocalDate, Sequence);
 
-    public static string MakeId(string propertyId, RuleType type, DateOnly firstDate) =>
-        $"{propertyId}~{type}~{firstDate:yyyy-MM-dd}";
+    public static string MakeId(string propertyId, RuleType type, DateOnly firstDate, int sequence = 0) =>
+        sequence == 0 ? $"{propertyId}~{type}~{firstDate:yyyy-MM-dd}" : $"{propertyId}~{type}~{firstDate:yyyy-MM-dd}~{sequence}";
 
-    public static bool TryParseId(string id, out string propertyId, out RuleType type, out DateOnly firstDate)
+    public static bool TryParseId(string id, out string propertyId, out RuleType type, out DateOnly firstDate, out int sequence)
     {
         propertyId = "";
         type = default;
         firstDate = default;
+        sequence = 0;
         var parts = id.Split('~');
-        if (parts.Length != 3 || parts[0].Length == 0)
+        if (parts.Length is not (3 or 4) || parts[0].Length == 0)
         {
             return false;
         }
 
         propertyId = parts[0];
         return Enum.TryParse(parts[1], out type)
-            && DateOnly.TryParseExact(parts[2], "yyyy-MM-dd", out firstDate);
+            && DateOnly.TryParseExact(parts[2], "yyyy-MM-dd", out firstDate)
+            && (parts.Length == 3 || (int.TryParse(parts[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out sequence) && sequence > 0));
     }
 }
 
@@ -224,6 +251,23 @@ public sealed record Measurement(
 {
     public const string EnergyConsumption = "energy.consumption";
 }
+
+/// <summary>
+/// The latest state of a heat pump as Sensibo reports it. Sensibo measures in Celsius whatever the
+/// display unit; <see cref="TargetTemperature"/> is in <see cref="TemperatureUnit"/>.
+/// </summary>
+public sealed record HeatPumpReading(
+    string DeviceId,
+    string Name,
+    double? TemperatureC,
+    double? Humidity,
+    DateTimeOffset? MeasuredAtUtc,
+    bool Online,
+    DateTimeOffset? LastSeenUtc,
+    bool? On = null,
+    string? Mode = null,
+    double? TargetTemperature = null,
+    string? TemperatureUnit = null);
 
 public sealed record NotificationMessage(string Text);
 

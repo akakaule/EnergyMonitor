@@ -3,6 +3,7 @@ using EnergyMonitor.Core.Abstractions;
 using EnergyMonitor.Core.Model;
 using EnergyMonitor.Core.Reports;
 using EnergyMonitor.Core.Time;
+using EnergyMonitor.Web.HeatPump;
 using EnergyMonitor.Web.Storage;
 using Microsoft.Extensions.Options;
 
@@ -71,6 +72,8 @@ public sealed class ReportService(
     IAlertStore alerts,
     IOutboxStore outbox,
     NotificationSettingsService settings,
+    HeatPumpStateService heatPumps,
+    IOptionsMonitor<SensiboOptions> sensibo,
     TimeProvider time,
     IOptions<ScheduleOptions> schedule)
 {
@@ -83,7 +86,8 @@ public sealed class ReportService(
             LocalDay.Of(now, zone),
             await summaries.GetAllAsync(ct),
             await alerts.GetEventsAsync(AlertEvent.SystemPropertyId, ct),
-            lastSync?.FinishedAtUtc is { } finished ? TimeZoneInfo.ConvertTime(finished, zone) : null);
+            lastSync?.FinishedAtUtc is { } finished ? TimeZoneInfo.ConvertTime(finished, zone) : null,
+            sensibo.CurrentValue.Enabled ? await heatPumps.LinkedReadingsAsync(ct) : null);
     }
 
     /// <summary>Queues today's report. The message id is the date, so a day gets one report however often this runs.</summary>
@@ -145,11 +149,12 @@ public sealed partial class MonitorPipeline(
 /// <summary>
 /// The one background loop. Each minute it runs the slots that are due in local time. A slot is claimed
 /// in storage before it runs, so a restart neither repeats a slot nor loses one that fell due while the
-/// app was down.
+/// app was down. The heat pump is collected every 15 minutes on the same loop.
 /// </summary>
 public sealed partial class SchedulerService(
     MonitorPipeline pipeline,
     ReportService reports,
+    HeatPumpCollector heatPump,
     OutboxDispatcher dispatcher,
     IStateStore state,
     TimeProvider time,
@@ -214,6 +219,7 @@ public sealed partial class SchedulerService(
             }
         }
 
+        await heatPump.RunIfDueAsync(ct);
         await dispatcher.DispatchAsync(ct);
     }
 

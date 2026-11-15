@@ -7,7 +7,12 @@ public static class PricingEndpoints
 {
     public static void MapPricing(this WebApplication app)
     {
-        app.MapGet("/api/features", () => new { pricing = app.Configuration.GetValue<bool>("Pricing:Enabled"), mcp = app.Configuration.GetValue<bool>("Mcp:Enabled") }).RequireAuthorization(AuthSetup.Viewer);
+        app.MapGet("/api/features", () => new
+        {
+            pricing = app.Configuration.GetValue<bool>("Pricing:Enabled"),
+            mcp = app.Configuration.GetValue<bool>("Mcp:Enabled"),
+            heatpump = HeatPump.HeatPumpEndpoints.IsEnabled(app.Configuration),
+        }).RequireAuthorization(AuthSetup.Viewer);
         if (!app.Configuration.GetValue<bool>("Pricing:Enabled")) return;
         var api = app.MapGroup("/api/energy").RequireAuthorization(AuthSetup.Viewer);
         api.AddEndpointFilter(async (context, next) =>

@@ -5,6 +5,7 @@ using EnergyMonitor.Core.Model;
 using EnergyMonitor.Core.Reports;
 using EnergyMonitor.Core.Time;
 using EnergyMonitor.Web.Eloverblik;
+using EnergyMonitor.Web.HeatPump;
 using EnergyMonitor.Web.Storage;
 using Microsoft.Extensions.Options;
 
@@ -47,6 +48,8 @@ public sealed class SummaryService(
     IConsumptionStore consumption,
     IAlertStore alerts,
     ISyncRunStore runs,
+    HeatPumpStateService heatPumps,
+    IOptionsMonitor<SensiboOptions> sensibo,
     TimeProvider time)
 {
     public const int HistoryDays = 60;
@@ -55,7 +58,10 @@ public sealed class SummaryService(
     {
         var stored = await alerts.GetRulesAsync(propertyId, ct);
         var now = time.GetUtcNow();
-        return [.. AlertRule.PropertyRuleTypes.Select(t => stored.FirstOrDefault(r => r.Type == t) ?? AlertRule.Default(propertyId, t, now))];
+        IReadOnlyList<RuleType> types = sensibo.CurrentValue.Enabled && (await heatPumps.GetLinksAsync(ct)).Any(l => l.PropertyId == propertyId)
+            ? [.. AlertRule.PropertyRuleTypes, .. AlertRule.HeatPumpRuleTypes]
+            : AlertRule.PropertyRuleTypes;
+        return [.. types.Select(t => stored.FirstOrDefault(r => r.Type == t) ?? AlertRule.Default(propertyId, t, now))];
     }
 
     public async Task<(PropertySummary Summary, IReadOnlyList<DailyConsumption> Days)> GetAsync(Property property, CancellationToken ct)
@@ -97,6 +103,7 @@ public sealed partial class AlertService(
     IOutboxStore outbox,
     SummaryService summaries,
     EloverblikTokenStatus token,
+    HeatPumpStateService heatPumps,
     TimeProvider time,
     IOptions<SyncOptions> syncOptions,
     IOptions<ScheduleOptions> schedule,
@@ -124,6 +131,36 @@ public sealed partial class AlertService(
         var recent = await runs.GetRecentAsync(EloverblikMeasurementSource.Id, 10, ct);
         var systemEvents = await alerts.GetEventsAsync(AlertEvent.SystemPropertyId, ct);
         var source = RuleEngine.EvaluateSource(recent, token.ExpiresAt, systemEvents, RuleParams.DefaultFor(RuleType.SourceFailure), now, systemZone);
+        await ApplyAsync(AlertEvent.SystemPropertyId, "Datakilde", source, ct);
+    }
+
+    /// <summary>
+    /// Heat pump rules after a collection. A failed collection only feeds the Sensibo source rule: the last
+    /// readings are stale then, and judging them would raise false house alarms.
+    /// </summary>
+    public async Task EvaluateHeatPumpAsync(HeatPumpStatus status, CancellationToken ct)
+    {
+        var now = time.GetUtcNow();
+        if (status.ConsecutiveFailures == 0)
+        {
+            foreach (var link in await heatPumps.GetLinksAsync(ct))
+            {
+                if (await properties.GetAsync(link.PropertyId, ct) is not { } property
+                    || status.Devices.FirstOrDefault(d => d.DeviceId == link.DeviceId) is not { } reading)
+                {
+                    continue;
+                }
+
+                var rules = await summaries.GetRulesAsync(property.Id, ct);
+                var existing = await alerts.GetEventsAsync(property.Id, ct);
+                var result = HeatPumpRules.EvaluateProperty(property, rules, reading, existing, now, LocalDay.Zone(property.TimeZone));
+                await ApplyAsync(property.Id, property.Name, result, ct);
+            }
+        }
+
+        var systemEvents = await alerts.GetEventsAsync(AlertEvent.SystemPropertyId, ct);
+        var source = HeatPumpRules.EvaluateSource(
+            status.ConsecutiveFailures, status.LastError, systemEvents, RuleParams.DefaultFor(RuleType.SensiboFailure), now, LocalDay.Zone(schedule.Value.TimeZone));
         await ApplyAsync(AlertEvent.SystemPropertyId, "Datakilde", source, ct);
     }
 

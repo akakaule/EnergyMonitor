@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Copies the Eloverblik and Telegram tokens from Key Vault into the web project's user secrets.
+    Copies the Eloverblik and Telegram tokens and the Sensibo API key from Key Vault into the web project's user secrets.
+    The Sensibo key is optional: it is skipped when the vault has no Sensibo--ApiKey.
 
 .DESCRIPTION
     For a development workstation. Requires `az login` with read access to the vault's secrets.
@@ -32,6 +33,12 @@ $secrets = [ordered]@{}
 foreach ($name in 'Eloverblik--RefreshToken', 'Telegram--BotToken') {
     $secrets[$name -replace '--', ':'] = Get-VaultSecret $name
 }
+$sensibo = az keyvault secret show --vault-name $Vault --name 'Sensibo--ApiKey' --query value -o tsv 2>$null
+if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($sensibo)) {
+    $secrets['Sensibo:ApiKey'] = $sensibo.Trim()
+}
+$sensibo = $null
+$stored = @($secrets.Keys) -join ', '
 
 $secrets | ConvertTo-Json -Compress | dotnet user-secrets set --project $Project | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'dotnet user-secrets set failed.' }
@@ -42,5 +49,5 @@ if ($RealUpstreams) {
     if ($LASTEXITCODE -ne 0) { throw 'dotnet user-secrets set failed.' }
 }
 
-Write-Host "Stored Eloverblik:RefreshToken and Telegram:BotToken from '$Vault' in the user secrets of $(Split-Path -Leaf (Resolve-Path $Project))."
+Write-Host "Stored $stored from '$Vault' in the user secrets of $(Split-Path -Leaf (Resolve-Path $Project))."
 if ($RealUpstreams) { Write-Host 'Set UseRealUpstreams=true on the AppHost.' }

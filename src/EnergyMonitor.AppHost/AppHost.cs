@@ -1,6 +1,6 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Local development: Azurite for Table Storage, and a fake Eloverblik + Telegram so the whole flow can be
+// Local development: Azurite for Table Storage, and a fake Eloverblik + Telegram + Sensibo so the whole flow can be
 // driven without real credentials. Set UseRealUpstreams=true (and the secrets with `dotnet user-secrets`
 // on EnergyMonitor.Web) to talk to the real services instead.
 var tables = builder.AddAzureStorage("storage")
@@ -23,7 +23,10 @@ if (!string.Equals(builder.Configuration["UseRealUpstreams"], "true", StringComp
         .WithEnvironment("Eloverblik__RetryBaseDelaySeconds", "2")
         .WithEnvironment("Telegram__BaseUrl", fakeUrl)
         .WithEnvironment("Telegram__BotToken", "000000:fake-bot-token")
-        .WithEnvironment("Telegram__ChatIds__0", "1000");
+        .WithEnvironment("Telegram__ChatIds__0", "1000")
+        .WithEnvironment("Sensibo__Enabled", "true")
+        .WithEnvironment("Sensibo__BaseUrl", ReferenceExpression.Create($"{fakeUrl}/sensibo/api/v2/"))
+        .WithEnvironment("Sensibo__ApiKey", "sensibo-KEY-do-not-log");
 }
 
 builder.Build().Run();

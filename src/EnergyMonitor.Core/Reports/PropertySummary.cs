@@ -62,7 +62,9 @@ public static class PropertySummaryCalculator
         }
 
         var stale = latest is null || ageHours > StaleAfterHours;
-        var status = latest is null || open.Any(e => e.RuleType == RuleType.MissingData) ? PropertyStatus.DataMissing
+        // A heat pump alarm (frost, offline) is about the house itself, so missing meter data must not hide it.
+        var status = open.Any(e => e.Severity == AlertSeverity.Alarm && AlertRule.HeatPumpRuleTypes.Contains(e.RuleType)) ? PropertyStatus.Alarm
+            : latest is null || open.Any(e => e.RuleType == RuleType.MissingData) ? PropertyStatus.DataMissing
             : open.Any(e => e.Severity == AlertSeverity.Alarm) ? PropertyStatus.Alarm
             : open.Count > 0 ? PropertyStatus.Observer
             : PropertyStatus.Normal;

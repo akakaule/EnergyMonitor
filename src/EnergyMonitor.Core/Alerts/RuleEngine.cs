@@ -263,7 +263,8 @@ public static class RuleEngine
     public static bool NeedsNotification(AlertEvent e) =>
         e.State == AlertState.Open && (e.LastNotifiedSeverity is null || e.Severity > e.LastNotifiedSeverity);
 
-    private sealed class WorkingSet(IReadOnlyList<AlertEvent> existing)
+    /// <summary>The events of one evaluation: the stored ones plus what this run creates or changes.</summary>
+    internal sealed class WorkingSet(IReadOnlyList<AlertEvent> existing)
     {
         private readonly Dictionary<string, AlertEvent> _events = existing.ToDictionary(e => e.Id);
         private readonly HashSet<string> _created = [];

@@ -6,6 +6,7 @@ using EnergyMonitor.Core.Model;
 using EnergyMonitor.FakeUpstreams;
 using EnergyMonitor.Web.Auth;
 using EnergyMonitor.Web.Eloverblik;
+using EnergyMonitor.Web.HeatPump;
 using EnergyMonitor.Web.Jobs;
 using EnergyMonitor.Web.Notifications;
 using EnergyMonitor.Web.Storage;
@@ -76,9 +77,9 @@ public sealed class AppFactory : WebApplicationFactory<Program>
 
     private readonly WebApplication _fake;
 
-    public AppFactory(ITableBackend? backend = null, FakeState? fake = null, FakeTimeProvider? time = null, bool pricing = false, bool mcp = false, bool local = false)
+    public AppFactory(ITableBackend? backend = null, FakeState? fake = null, FakeTimeProvider? time = null, bool pricing = false, bool mcp = false, bool local = false, bool heatpump = false)
     {
-        Pricing = pricing; Mcp = mcp; Local = local;
+        Pricing = pricing; Mcp = mcp; Local = local; HeatPump = heatpump;
         Backend = backend ?? new InMemoryTableBackend();
         Time = time ?? new FakeTimeProvider(Start);
         Fake = fake ?? new FakeState();
@@ -95,6 +96,7 @@ public sealed class AppFactory : WebApplicationFactory<Program>
 
     private bool Pricing { get; }
     private bool Mcp { get; }
+    private bool HeatPump { get; }
 
     /// <summary>Runs as on the private Linux machine: Production environment, no sign-in, no OAuth for MCP.</summary>
     private bool Local { get; }
@@ -136,6 +138,9 @@ public sealed class AppFactory : WebApplicationFactory<Program>
         builder.UseSetting("Telegram:BaseUrl", "http://fake");
         builder.UseSetting("Telegram:BotToken", BotToken);
         builder.UseSetting("Telegram:ChatIds:0", ChatId);
+        builder.UseSetting("Sensibo:Enabled", HeatPump.ToString());
+        builder.UseSetting("Sensibo:BaseUrl", "http://fake/sensibo/api/v2/");
+        builder.UseSetting("Sensibo:ApiKey", FakeSensibo.ApiKey);
 
         builder.ConfigureLogging(logging => logging.SetMinimumLevel(LogLevel.Trace).AddProvider(Logs));
         builder.ConfigureTestServices(services =>
@@ -148,6 +153,7 @@ public sealed class AppFactory : WebApplicationFactory<Program>
             services.AddSingleton<IDelayer>(Delayer);
             services.AddHttpClient(EloverblikClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
             services.AddHttpClient(TelegramChannel.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
+            services.AddHttpClient(SensiboClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
         });
     }
 
@@ -177,6 +183,18 @@ public sealed class AppFactory : WebApplicationFactory<Program>
     {
         Time.Advance(TimeSpan.FromSeconds(1));
         return Get<MonitorPipeline>().RunSyncAsync(default);
+    }
+
+    /// <summary>Links the fake's heat pump to Sommerhus.</summary>
+    public Task LinkHeatPumpAsync() =>
+        Get<HeatPumpStateService>().SetLinksAsync([new HeatPumpLink(FakeSensibo.DeviceId, "sommerhus")], default);
+
+    /// <summary>Runs one heat pump collection (record, rules) and delivery, a second after the previous step.</summary>
+    public async Task CollectHeatPumpAsync(TimeSpan? after = null)
+    {
+        Time.Advance(after ?? TimeSpan.FromSeconds(1));
+        await Get<HeatPumpCollector>().CollectAsync(default);
+        await Get<OutboxDispatcher>().DispatchAsync(default);
     }
 
     public async Task<IReadOnlyList<AlertEvent>> EventsAsync(string propertyId = "sommerhus") =>

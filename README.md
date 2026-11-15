@@ -1,20 +1,20 @@
 # Energy Monitor
 
-Private monitoring of electricity consumption for a home and a summer house. It imports consumption from Energinet's [Eloverblik Customer API](https://api.eloverblik.dk/CustomerApi/index.html), shows it in a mobile-friendly dashboard (installable as a PWA), sends a daily status report on Telegram, and raises alarms when a day's consumption is unusually low or high, when data stops arriving, or when the data source fails.
+Private monitoring of electricity consumption for a home and a summer house. It imports consumption from Energinet's [Eloverblik Customer API](https://api.eloverblik.dk/CustomerApi/index.html), shows it in a mobile-friendly dashboard (installable as a PWA), sends a daily status report on Telegram, and raises alarms when a day's consumption is unusually low or high, when data stops arriving, or when the data source fails. It also monitors and controls the summer house's heat pump through [Sensibo](https://sensibo.github.io/), records its temperature history, and raises a frost alarm when the house gets too cold (see [Heat pump](#heat-pump-sensibo)).
 
 This is the v1 of `energy-monitor-mvp-spec.md`. The user interface and all messages are in Danish; times are `Europe/Copenhagen`.
 
 ## How it fits together
 
 ```text
-Eloverblik Customer API        Telegram Bot API
-          ▲                           ▲
-          │                           │
-   ┌──────┴───────────────────────────┴──────┐
-   │ EnergyMonitor.Web (.NET 10, one container) │
-   │  · background scheduler: sync 08:00/17:00, │
-   │    report 09:00 (Danish time)              │
-   │  · rule engine and notification outbox     │
+Eloverblik Customer API        Telegram Bot API        Sensibo API
+          ▲                           ▲                      ▲
+          │                           │                      │
+   ┌──────┴───────────────────────────┴──────────────────────┴──┐
+   │ EnergyMonitor.Web (.NET 10, one container)                  │
+   │  · background scheduler: sync 08:00/17:00,                  │
+   │    report 09:00 (Danish time), heat pump every 15 minutes   │
+   │  · rule engine and notification outbox                      │
    │  · HTTP API + the built React PWA          │
    └──────┬──────────────────────────────────┘
           │
@@ -25,11 +25,11 @@ Eloverblik Customer API        Telegram Bot API
 | Path | What |
 |---|---|
 | `src/EnergyMonitor.Core` | Pure domain: models, Danish-day arithmetic, daily aggregation and data quality, the rule engine, report text. No Azure or HTTP dependencies. |
-| `src/EnergyMonitor.Web` | Eloverblik client, Table Storage stores, Telegram channel, scheduler and jobs, API, sign-in. Serves the PWA from `wwwroot`. |
+| `src/EnergyMonitor.Web` | Eloverblik client, Table Storage stores, Telegram channel, scheduler and jobs, API, sign-in, the heat pump module (`HeatPump/`). Serves the PWA from `wwwroot`. |
 | `src/frontend` | React + TypeScript + Vite PWA. Builds into `src/EnergyMonitor.Web/wwwroot`. |
 | `src/EnergyMonitor.AppHost` | Aspire AppHost for local runs: Azurite, the app, and the fake upstreams. |
 | `tests/EnergyMonitor.Tests` | xUnit tests: domain, Eloverblik client, the whole pipeline in-process, API and authorization, storage contract. |
-| `tests/EnergyMonitor.FakeUpstreams` | A fake Eloverblik and Telegram with switchable scenarios, for tests and local runs. |
+| `tests/EnergyMonitor.FakeUpstreams` | A fake Eloverblik, Telegram and Sensibo with switchable scenarios, for tests and local runs. |
 | `deploy/local` | Docker Compose for the private Linux machine (in use). |
 | `infra` | Bicep for one Azure resource group per environment (not in use at the moment). |
 
@@ -71,6 +71,9 @@ curl -X POST http://localhost:5099/control/scenario/low            # summer hous
 curl -X POST http://localhost:5099/control/scenario/missing        # summer house: no data for the last 5 days
 curl -X POST http://localhost:5099/control/scenario/outage         # Eloverblik answers 503
 curl -X POST http://localhost:5099/control/scenario/telegram-down  # Telegram fails; messages stay queued
+curl -X POST http://localhost:5099/control/scenario/cold           # heat pump: 3,5 °C indoors (frost alarm)
+curl -X POST http://localhost:5099/control/scenario/offline        # heat pump: lost its connection 3 hours ago
+curl -X POST http://localhost:5099/control/scenario/sensibo-down   # Sensibo answers 503
 curl -X POST http://localhost:5099/control/scenario/normal         # reset
 curl http://localhost:5099/control/telegram                        # the messages "sent" so far
 ```
@@ -102,6 +105,8 @@ The pipeline tests run the real application in-process with a controllable clock
 |---|---|---|
 | `Eloverblik:RefreshToken` | Personal token from eloverblik.dk | Key Vault secret `Eloverblik--RefreshToken` |
 | `Telegram:BotToken` | Bot token from BotFather | Key Vault secret `Telegram--BotToken` |
+| `Sensibo:ApiKey` | API key from <https://home.sensibo.com/me/api> | Key Vault secret `Sensibo--ApiKey` |
+| `Sensibo:Enabled`, `Sensibo:IntervalMinutes` | The heat pump module (default off) and how often it is recorded (default 15) | App settings / `.env` |
 | `Auth:ClientSecret` | Client secret of the sign-in app registration | Key Vault secret `Auth--ClientSecret` |
 | `Auth:Authority`, `Auth:ClientId` | OIDC provider (Entra ID or any standard OIDC) | Bicep parameters |
 | `Auth:Users:n:Subject` / `:Role` | Allowlist. Subject is an e-mail address the provider reports as verified (Google), or the user's `sub`, object id (`oid`) or sign-in name (Entra ID). Role is `admin` or `viewer` | Bicep parameter `users` |
@@ -113,7 +118,7 @@ The pipeline tests run the real application in-process with a controllable clock
 | `Auth:Mode` | `Oidc` (default), `None` (no sign-in; private network only) or `Development` (local runs) | App settings |
 | `Storage:Mode`, `Storage:Path` | `Tables` (default, Azure Table Storage/Azurite), `Sqlite` with a file path, or `InMemory` | App settings |
 
-Secrets exist only in Key Vault (or local user secrets). They are never sent to the browser, never part of an API response, and are kept out of logs: metering point ids are logged as their last four digits, and Telegram requests (whose URL contains the bot token) are excluded from HTTP logging and tracing. Tests assert this on captured log output.
+Secrets exist only in Key Vault (or local user secrets). They are never sent to the browser, never part of an API response, and are kept out of logs: metering point ids are logged as their last four digits, and Telegram and Sensibo requests (whose URLs contain the bot token and API key) are excluded from HTTP logging, with the query redacted from traces. Tests assert this on captured log output.
 
 ### Eloverblik token
 
@@ -129,7 +134,7 @@ Create a bot with [@BotFather](https://t.me/BotFather), store its token as `Tele
 
 ## Alarm rules
 
-Evaluated only on complete Danish calendar days. Defaults are starting values for calibration, editable per property under Indstillinger. A low consumption is only an indicator of a possible fault.
+The electricity rules are evaluated only on complete Danish calendar days; the heat pump rules on every collection (every 15 minutes), and only for a property with a linked heat pump. Defaults are starting values for calibration, editable per property under Indstillinger. A low consumption is only an indicator of a possible fault.
 
 | Rule | Default | Result |
 |---|---|---|
@@ -137,9 +142,12 @@ Evaluated only on complete Danish calendar days. Defaults are starting values fo
 | High consumption | Above 200 % of that median, median at least 3 kWh | `Observer` |
 | Missing data | No new complete day for 72 hours | `Data mangler` (not a consumption alarm) |
 | Source failure | 3 consecutive failed syncs, or a rejected or expired token | Technical alarm |
+| Indoor too cold (heat pump) | Latest indoor temperature below 5 °C | `Observer`, then `Alarm` after 120 minutes; closes at 6 °C |
+| Heat pump offline | Not seen by Sensibo for more than 60 minutes | `Alarm` |
+| Sensibo failure | 3 consecutive failed collections, or a rejected API key | Technical alarm |
 
 - The median excludes the analysed day and needs at least 7 complete days; until then the dashboard shows *Utilstrækkelig historik* and the relative rules are off.
-- An event is unique on (property, rule, first affected day). Repeated syncs and restarts cannot duplicate it, and a closed event is never reopened for the same day.
+- An event is unique on (property, rule, first affected day). Repeated syncs and restarts cannot duplicate it, and a closed event is never reopened for the same day. A heat pump rule that clears and triggers again on the same day raises a second event (`…~2026-11-14~1`), so a second cold spell is never silent.
 - The observed value, median, threshold and rule parameters are stored with the event as a snapshot.
 - A failed Telegram delivery stays in an outbox and is retried every minute for up to 72 hours. The event itself is not touched.
 
@@ -165,6 +173,7 @@ sudo tailscale serve --bg 8080             # https://<machine>.<tailnet>.ts.net
 - **Update**: `git pull && docker compose up -d --build`.
 - **Token renewed** in the vault: run `scripts/pull-secrets.sh` again (it keeps the other settings in `.env`), then `docker compose up -d`. Without `az` on the machine, run the script on one that has it and send the file over the tailnet: `tailscale file cp .env <machine>:`.
 - **Logs**: `docker compose logs -f`.
+- **Heat pump**: put the key in the vault (`az keyvault secret set --vault-name <vault> --name Sensibo--ApiKey --value "<key>"`), run `scripts/pull-secrets.sh`, set `Sensibo__Enabled=true` in `.env`, `docker compose up -d`, then link the heat pump to Sommerhus under Indstillinger → Varmepumpe.
 - **MCP from Claude Code** on a machine in the tailnet: set `Mcp__Enabled=true` in `.env`, restart, then `claude mcp add --transport http energy-monitor https://<machine>.<tailnet>.ts.net/mcp`. Claude.ai connectors cannot reach a tailnet.
 
 **Moving data off Azure Table Storage** (one time): with `az login` and the *Storage Table Data Reader* role on the account, run
@@ -248,13 +257,25 @@ Verified locally on 10 November 2026. "Fakes" means the in-repo fake Eloverblik 
 
 Not verified against the real services: the live Eloverblik API (the client follows the Swagger fetched on 9 November 2026; no personal token was available), live Telegram, and a real Entra ID sign-in.
 
+## Heat pump (Sensibo)
+
+The summer house's heat pump is a module of its own, on with `Sensibo:Enabled` and `Sensibo:ApiKey`. It replaces the separate Heatpump app.
+
+- **Varmepumpe** page: live temperature, humidity and connection; power, mode, target temperature, fan, swing, light (only what the remote supports), a one-shot timer and Climate React; history for the last day, week, month and year. It polls every 60 s while the tab is visible.
+- **Recording**: every 15 minutes the scheduler reads the devices' current state and Sensibo's rolling 24 hours of measurements and stores them (one row per device and hour, in any storage mode). A gap shorter than a day is filled in by the next run. Long ranges are averaged to about 720 points.
+- **Alarms** on Telegram (see [Alarm rules](#alarm-rules)) for the property the heat pump is linked to, under Indstillinger → Varmepumpe. Thresholds are edited with the property's other rules. A failed collection never judges the stale readings, so a Sensibo outage raises one technical alarm instead of false frost or offline alarms.
+- The daily report gets a line such as `Sommerhus · varmepumpe: 9,5 °C inde, 60 % fugt. Tændt: varme 10 °C.`
+- **The key stays on the server.** The browser calls `/api/heatpump/sensibo/…`, a fixed allowlist of the Sensibo endpoints the page uses (`users/me/pods`, `pods/{id}`, `acStates`, `historicalMeasurements`, `smartmode`, `timer`); the server adds the key. Reads need the viewer role and changes the admin role, so with `Auth:Mode=None` everyone on the tailnet can control the heat pump. Sensibo errors come back as codes (`sensibo_key_rejected`, `sensibo_rate_limited`, …), never as a 401.
+- Requests are gzip-compressed, which Sensibo rewards with a higher rate limit, and there are no automatic retries.
+- **MCP** gets one read-only tool, `get_heatpump_status`. There are deliberately no tools that change the heat pump.
+
 ## Later: Home Assistant
 
 Not implemented, but the seams exist: `IMeasurementSource`, `INotificationChannel` and the neutral `Measurement` record (`sourceId`, `propertyId`, `metric`, `value`, `unit`, `observedAtUtc`, `quality`). A future Home Assistant adapter in the summer house should push selected events and a heartbeat outbound to an authenticated endpoint here, so no inbound ports are opened there.
 
 ## Electricity prices and read-only MCP
 
-Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and seven `/mcp` tools (including `get_price_estimate`, the "ca. pris" estimate) share `EnergyQueryService` and the decimal calculator in Core.
+Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and seven `/mcp` tools (including `get_price_estimate`, the "ca. pris" estimate) share `EnergyQueryService` and the decimal calculator in Core. With the heat pump module on, `/mcp` has an eighth tool, `get_heatpump_status`.
 
 Enable `Pricing:Enabled` in dev to register dated agreements in Settings. `Mcp:Enabled` additionally requires `Mcp:Authority`, `Mcp:Audience`, `Mcp:Resource` (the public HTTPS `/mcp` URL) and a delegated `Mcp:ReadScope` (default `energy.read`). Browser sign-in cookies do not authorize MCP. The OAuth provider must issue signed access tokens for that audience, and the authenticated subject must also match the existing `Auth:Users` allowlist. Google browser ID tokens are not API access tokens for this resource.
 

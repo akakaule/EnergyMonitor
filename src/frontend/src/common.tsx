@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, errorText, type Alert, type Status } from './api';
-import { dateTime, kWh, shortDate } from './format';
+import { celsius, dateTime, kWh, shortDate } from './format';
 
 export interface Loaded<T> {
   data: T | null;
@@ -33,6 +33,45 @@ export function useLoad<T>(load: () => Promise<T>, key: string): Loaded<T> {
   return { ...state, reload };
 }
 
+/**
+ * Calls `callback` every `intervalMs` while the page is visible, and once on return to the page when a
+ * call is overdue. A hidden tab (a phone in a pocket) makes no calls.
+ */
+export function usePolling(callback: () => void, intervalMs: number, enabled = true): void {
+  const latest = useRef(callback);
+  useEffect(() => {
+    latest.current = callback;
+  });
+  useEffect(() => {
+    if (!enabled) return;
+    let last = Date.now();
+    const run = () => {
+      last = Date.now();
+      latest.current();
+    };
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') run();
+    }, intervalMs);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && Date.now() - last >= intervalMs) run();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [intervalMs, enabled]);
+}
+
+export function Switch({ checked, onChange, disabled, children }: { checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean; children: ReactNode }) {
+  return (
+    <label className="switch">
+      <input type="checkbox" role="switch" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span>{children}</span>
+    </label>
+  );
+}
+
 const STATUS_ICON: Record<Status, string> = { Normal: '✓', Observer: '◔', Alarm: '!', DataMissing: '?' };
 
 /** Status is always an icon and a word, never colour alone. */
@@ -57,6 +96,27 @@ export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () 
 function alertStatus(alert: Alert): Status {
   if (alert.ruleType === 'MissingData') return 'DataMissing';
   return alert.severity === 'Alarm' ? 'Alarm' : 'Observer';
+}
+
+/** What the alert was measured against, in the unit of its rule. */
+function AlertBasis({ alert: a }: { alert: Alert }) {
+  if (a.ruleType === 'IndoorTooCold') {
+    if (a.observed === null) return null;
+    return (
+      <p className="alert-basis">
+        Målt {celsius(a.observed)}
+        {a.threshold !== null ? ` · grænse ${celsius(a.threshold)}` : ''}
+      </p>
+    );
+  }
+  if (a.ruleType === 'HeatPumpOffline' || a.ruleType === 'SensiboFailure') return null;
+  if (a.observed === null || a.baseline === null) return null;
+  return (
+    <p className="alert-basis">
+      Målt {kWh(a.observed)} · median {kWh(a.baseline)}
+      {a.threshold !== null ? ` · grænse ${kWh(a.threshold)}` : ''}
+    </p>
+  );
 }
 
 export function AlertList({ alerts, onChanged, showProperty }: { alerts: Alert[]; onChanged: () => void; showProperty?: boolean }) {
@@ -91,12 +151,7 @@ export function AlertList({ alerts, onChanged, showProperty }: { alerts: Alert[]
               </span>
             </div>
             <p className="alert-text">{a.explanation}</p>
-            {a.observed !== null && a.baseline !== null && (
-              <p className="alert-basis">
-                Målt {kWh(a.observed)} · median {kWh(a.baseline)}
-                {a.threshold !== null ? ` · grænse ${kWh(a.threshold)}` : ''}
-              </p>
-            )}
+            <AlertBasis alert={a} />
             <div className="alert-foot">
               {a.acknowledgedAtUtc ? (
                 <span className="muted">Kvitteret {dateTime(a.acknowledgedAtUtc)}</span>

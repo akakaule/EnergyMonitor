@@ -10,7 +10,7 @@ namespace EnergyMonitor.Tests.Web;
 
 public class ApiTests : IAsyncLifetime
 {
-    private readonly AppFactory _app = new();
+    private readonly AppFactory _app = new(heatpump: true);
 
     public async ValueTask InitializeAsync()
     {
@@ -47,6 +47,12 @@ public class ApiTests : IAsyncLifetime
         { "GET", "/api/admin/export" },
         { "GET", "/api/admin/report" },
         { "DELETE", "/api/admin/properties/sommerhus/data" },
+        { "GET", "/api/heatpump" },
+        { "GET", "/api/heatpump/history/Pod1Stue?days=1" },
+        { "GET", "/api/heatpump/sensibo/users/me/pods" },
+        { "POST", "/api/heatpump/sensibo/pods/Pod1Stue/acStates" },
+        { "PUT", "/api/admin/heatpump/links" },
+        { "POST", "/api/admin/heatpump/collect" },
         { "GET", "/api/does-not-exist" },
     };
 
@@ -90,6 +96,12 @@ public class ApiTests : IAsyncLifetime
     [InlineData("PUT", "/api/admin/properties/sommerhus")]
     [InlineData("DELETE", "/api/admin/properties/sommerhus/data")]
     [InlineData("PUT", "/api/properties/sommerhus/rules/LowConsumption")]
+    [InlineData("PUT", "/api/admin/heatpump/links")]
+    [InlineData("POST", "/api/admin/heatpump/collect")]
+    [InlineData("POST", "/api/heatpump/sensibo/pods/Pod1Stue/acStates")]
+    [InlineData("PUT", "/api/heatpump/sensibo/pods/Pod1Stue/timer/")]
+    [InlineData("DELETE", "/api/heatpump/sensibo/pods/Pod1Stue/timer/")]
+    [InlineData("PUT", "/api/heatpump/sensibo/pods/Pod1Stue/smartmode")]
     public async Task Viewer_CannotUseAdminEndpoints(string method, string url)
     {
         using var client = _app.ClientFor(AppFactory.Viewer);
