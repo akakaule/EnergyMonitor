@@ -75,12 +75,13 @@ curl -X POST http://localhost:5099/control/scenario/normal         # reset
 curl http://localhost:5099/control/telegram                        # the messages "sent" so far
 ```
 
-To use the real services locally, set `UseRealUpstreams=true` for the AppHost and store the secrets for the web project:
+To use the real services locally, copy the tokens from Key Vault into the web project's user secrets and set `UseRealUpstreams=true` for the AppHost. This needs `az login` with read access to the vault's secrets:
 
-```sh
-dotnet user-secrets --project src/EnergyMonitor.Web set "Eloverblik:RefreshToken" "<token>"
-dotnet user-secrets --project src/EnergyMonitor.Web set "Telegram:BotToken" "<token>"
+```powershell
+./scripts/pull-secrets.ps1 -RealUpstreams
 ```
+
+Run it again on each new workstation, and after a token is renewed in the vault. Do not copy secrets between machines in any other way.
 
 For frontend work, `npm run dev` in `src/frontend` proxies `/api` to the running app.
 
@@ -152,7 +153,7 @@ Requires Docker with Compose and Tailscale (with MagicDNS and HTTPS certificates
 
 ```sh
 git clone https://github.com/akakaule/EnergyMonitor.git && cd EnergyMonitor/deploy/local
-cp .env.example .env && chmod 600 .env     # fill in the tokens (see the comments in the file)
+az login --use-device-code && ../../scripts/pull-secrets.sh && az logout   # writes .env (mode 600) from Key Vault
 mkdir -p data && sudo chown 1654 data      # 1654 is the app user inside the image
 # Moving from Azure: put the copied energymonitor.db into data/ first (see below)
 docker compose up -d --build
@@ -162,6 +163,7 @@ sudo tailscale serve --bg 8080             # https://<machine>.<tailnet>.ts.net
 - **Storage** is one SQLite file, `deploy/local/data/energymonitor.db` (`Storage:Mode=Sqlite`, `Storage:Path`).
 - **Backup**: copy the file while the app runs with `sqlite3 data/energymonitor.db ".backup 'backup.db'"` (e.g. nightly from cron to another disk), or use Indstillinger → *Hent eksport*.
 - **Update**: `git pull && docker compose up -d --build`.
+- **Token renewed** in the vault: run `scripts/pull-secrets.sh` again (it keeps the other settings in `.env`), then `docker compose up -d`. Without `az` on the machine, run the script on one that has it and send the file over the tailnet: `tailscale file cp .env <machine>:`.
 - **Logs**: `docker compose logs -f`.
 - **MCP from Claude Code** on a machine in the tailnet: set `Mcp__Enabled=true` in `.env`, restart, then `claude mcp add --transport http energy-monitor https://<machine>.<tailnet>.ts.net/mcp`. Claude.ai connectors cannot reach a tailnet.
 

@@ -1,7 +1,7 @@
 # Energy Monitor on a private Linux machine, reached only through Tailscale.
 # See README, "Kør på en Linux-maskine med Tailscale".
 #
-#   cp .env.example .env    # fill in the secrets
+#   ../../scripts/pull-secrets.sh    # writes .env from Key Vault
 #   docker compose up -d --build
 #   sudo tailscale serve --bg 8080
 
