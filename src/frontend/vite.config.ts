@@ -15,7 +15,7 @@ export default defineConfig({
       manifest: {
         name: 'Energy Monitor',
         short_name: 'Energi',
-        description: 'Elforbrug og alarmer for hjem og sommerhus',
+        description: 'Elforbrug, varmepumpe og alarmer for hjem og sommerhus',
         lang: 'da',
         start_url: '/',
         scope: '/',

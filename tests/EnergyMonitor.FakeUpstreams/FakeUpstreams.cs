@@ -53,6 +53,8 @@ public sealed class FakeState
 
     public List<(string ChatId, string Text)> TelegramMessages { get; } = [];
 
+    public FakeSensibo Sensibo { get; } = new();
+
     public DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(Now(), Zone).DateTime);
 
     public DateOnly LatestAvailable => Today.AddDays(-DelayDays);
@@ -77,6 +79,7 @@ public sealed class FakeState
             PartialDays.Clear();
             MissingFrom.Clear();
             DailyOnly.Clear();
+            Sensibo.Reset();
         }
     }
 
@@ -128,6 +131,18 @@ public sealed class FakeState
                     return true;
                 case "telegram-up":
                     TelegramDown = false;
+                    return true;
+                case "cold":
+                    Sensibo.Temperature = 3.5;
+                    return true;
+                case "offline":
+                    Sensibo.Online = false;
+                    return true;
+                case "sensibo-down":
+                    Sensibo.Down = true;
+                    return true;
+                case "sensibo-key-rejected":
+                    Sensibo.KeyRejected = true;
                     return true;
                 default:
                     return false;
@@ -228,13 +243,15 @@ public static class FakeUpstreamsApp
             });
         });
 
+        app.MapFakeSensibo();
+
         app.MapPost("/control/scenario/{name}", (string name, FakeState state) =>
             state.ApplyScenario(name) ? Results.Ok(new { applied = name }) : Results.NotFound());
 
         app.MapGet("/control/telegram", (FakeState state) => state.Locked(() =>
             Results.Json(state.TelegramMessages.Select(m => new { chatId = m.ChatId, text = m.Text }).ToArray())));
 
-        app.MapGet("/", () => "Fake Eloverblik + Telegram. POST /control/scenario/{normal|low|low2|high|missing|partial|outage|token-expired|telegram-down|telegram-up}, GET /control/telegram");
+        app.MapGet("/", () => "Fake Eloverblik + Telegram + Sensibo. POST /control/scenario/{normal|low|low2|high|missing|partial|outage|token-expired|telegram-down|telegram-up|cold|offline|sensibo-down|sensibo-key-rejected}, GET /control/telegram");
     }
 
     private static string? Bearer(HttpRequest request)

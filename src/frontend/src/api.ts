@@ -1,3 +1,4 @@
+import type { AcState, Pod } from './sensibo';
 import type { CostResult, PricingConfiguration } from './Pricing';
 export type Quality = 'Complete' | 'Partial' | 'Missing';
 
@@ -68,11 +69,20 @@ export interface RuleParams {
   escalateAfterDays: number;
   missingHours: number;
   consecutiveFailures: number;
+  /** IndoorTooCold: the indoor temperature that counts as too cold. */
+  minTemperatureC?: number;
+  /** IndoorTooCold: how long it must stay too cold before Observer becomes Alarm. */
+  sustainedMinutes?: number;
+  /** HeatPumpOffline: how long the device may be silent. */
+  offlineMinutes?: number;
 }
+
+/** A property's rules. IndoorTooCold and HeatPumpOffline exist for a property with a linked heat pump. */
+export type RuleType = 'LowConsumption' | 'HighConsumption' | 'MissingData' | 'IndoorTooCold' | 'HeatPumpOffline';
 
 export interface Rule {
   id: string;
-  type: 'LowConsumption' | 'HighConsumption' | 'MissingData';
+  type: RuleType;
   enabled: boolean;
   params: RuleParams;
 }
@@ -123,6 +133,54 @@ export interface Estimate {
   assumptions: string[];
 }
 
+export interface Features {
+  pricing: boolean;
+  mcp: boolean;
+  heatpump: boolean;
+}
+
+/** A heat pump as of the server's last background collection. */
+export interface HeatPumpDevice {
+  id: string;
+  name: string;
+  propertyId: string | null;
+  temperature: number | null;
+  humidity: number | null;
+  measuredAtUtc: string | null;
+  /** When Sensibo last heard from the device. */
+  lastSeenUtc: string | null;
+  online: boolean;
+  on: boolean | null;
+  mode: string | null;
+  targetTemperature: number | null;
+  temperatureUnit: string | null;
+}
+
+export interface HeatPumpStatus {
+  /** Whether the server has a Sensibo API key. */
+  configured: boolean;
+  lastSuccessAtUtc: string | null;
+  lastAttemptAtUtc: string | null;
+  /** An error code, explained by `errorText`. */
+  lastError: string | null;
+  /** The oldest measurement the server has recorded; longer history ranges need it. */
+  oldestUtc: string | null;
+  intervalMinutes: number;
+  devices: HeatPumpDevice[];
+}
+
+export interface RawHistory {
+  temperature: { time: string; value: number }[];
+  humidity: { time: string; value: number }[];
+}
+
+/** Sensibo's answer to a new AC state. */
+export interface AcStateResult {
+  status?: string;
+  acState?: AcState;
+  failureReason?: string | null;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -166,8 +224,31 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   return (await response.json()) as T;
 }
 
+const POD_FIELDS = 'id,room,acState,measurements,mainMeasurementsSensor,remoteCapabilities,connectionStatus,temperatureUnit,smartMode,timer';
+
+/** Sensibo's API, reached through the server, which adds the key. Sensibo wraps every answer in `result`. */
+async function sensibo<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return (await request<{ result?: T } | undefined>(method, `/api/heatpump/sensibo/${path}`, body))?.result as T;
+}
+
+const pod = (id: string, suffix: string) => `pods/${encodeURIComponent(id)}${suffix}`;
+
 export const api = {
-  features: () => request<{ pricing: boolean; mcp: boolean }>('GET', '/api/features'),
+  features: () => request<Features>('GET', '/api/features'),
+  heatpump: () => request<HeatPumpStatus>('GET', '/api/heatpump'),
+  heatpumpHistory: (deviceId: string, days: number) =>
+    request<RawHistory>('GET', `/api/heatpump/history/${encodeURIComponent(deviceId)}?days=${days}`),
+  pods: async () => (await sensibo<Pod[] | undefined>('GET', `users/me/pods?fields=${POD_FIELDS}`)) ?? [],
+  /** The last 24 hours, straight from Sensibo. */
+  liveHistory: (deviceId: string) => sensibo<RawHistory | undefined>('GET', pod(deviceId, '/historicalMeasurements?days=1')),
+  setAcState: (deviceId: string, acState: AcState) => sensibo<AcStateResult | undefined>('POST', pod(deviceId, '/acStates'), { acState }),
+  setTimer: (deviceId: string, minutesFromNow: number, acState: AcState) =>
+    sensibo<unknown>('PUT', pod(deviceId, '/timer/'), { minutesFromNow, acState }),
+  cancelTimer: (deviceId: string) => sensibo<unknown>('DELETE', pod(deviceId, '/timer/')),
+  setClimateReact: (deviceId: string, enabled: boolean) => sensibo<unknown>('PUT', pod(deviceId, '/smartmode'), { enabled }),
+  saveHeatpumpLinks: (links: { deviceId: string; propertyId: string | null }[]) =>
+    request<void>('PUT', '/api/admin/heatpump/links', { links }),
+  collectHeatpump: () => request<void>('POST', '/api/admin/heatpump/collect'),
   priceStatus: (id: string, from: string, to: string) => request<{ sources: { source: string; lastSuccessUtc: string | null; errorCode: string | null }[] }>('GET', `/api/energy/${id}/status?from=${from}&to=${to}`),
   costs: (id: string, from: string, to: string) => request<CostResult>('GET', `/api/energy/${id}/costs?from=${from}&to=${to}`),
   estimate: (id: string, from: string, to: string) => request<Estimate>('GET', `/api/energy/${id}/estimate?from=${from}&to=${to}`),
@@ -215,10 +296,29 @@ const ERRORS: Record<string, string> = {
   http_429: 'Eloverblik begrænser antallet af kald lige nu. Prøv igen senere.',
   http_503: 'Eloverblik (DataHub) er midlertidigt utilgængelig.',
   network_error: 'Der er ingen forbindelse til Eloverblik.',
+  unknown_property: 'Ejendommen findes ikke.',
+  property_taken: 'En ejendom kan kun have én varmepumpe.',
+  internal_error: 'Serveren kunne ikke gemme målingerne. Se loggen.',
+  sensibo_not_configured: 'Der er ikke sat en Sensibo API-nøgle op på serveren.',
+  sensibo_key_rejected: 'Sensibo afviste API-nøglen. Den skal udskiftes på serveren.',
+  sensibo_rate_limited: 'Sensibo begrænser antallet af kald lige nu. Vent et minut, og prøv igen.',
+  sensibo_not_found: 'Sensibo kan ikke finde varmepumpen.',
+  sensibo_error: 'Sensibo svarede med en fejl. Prøv igen om lidt.',
+  sensibo_unreachable: 'Der er ingen forbindelse til Sensibo.',
+  sensibo_timeout: 'Sensibo svarede ikke i tide. Prøv igen.',
+  sensibo_bad_request: 'Sensibo afviste værdien. Varmepumpen understøtter den måske ikke.',
+  collect_running: 'Målingerne hentes allerede.',
+  invalid_device: 'En af varmepumperne findes ikke længere. Hent siden igen.',
+  invalid_days: 'Vælg et gyldigt antal dage.',
 };
+
+/** A message a person can act on for an error code from the server; unknown codes are shown as they are. */
+export function codeText(code: string): string {
+  return ERRORS[code] ?? `Der opstod en fejl (${code}).`;
+}
 
 /** A message a person can act on; unknown codes are shown as they are. */
 export function errorText(error: unknown): string {
-  if (error instanceof ApiError) return ERRORS[error.code] ?? `Der opstod en fejl (${error.code}).`;
+  if (error instanceof ApiError) return codeText(error.code);
   return 'Der er ingen forbindelse til serveren.';
 }

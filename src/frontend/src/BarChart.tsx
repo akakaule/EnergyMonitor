@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { useWidth } from './chart';
 import { kWh, number } from './format';
 
 export interface Bar {
@@ -22,22 +23,6 @@ interface Props {
   onSelect?: (key: string) => void;
   /** Sparkline mode: no axes, labels or tooltip. */
   compact?: boolean;
-}
-
-function useWidth(): [React.RefObject<HTMLDivElement | null>, number] {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState(320);
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const measure = () => setWidth(Math.max(160, element.clientWidth || 320));
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width];
 }
 
 /** A round axis maximum at or above the data, with 2–4 even steps. */

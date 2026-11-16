@@ -79,3 +79,77 @@ export function dayRange(days: string[]): string {
   if (days.length === 0) return '';
   return days.length === 1 ? shortDate(days[0]) : `${shortDate(days[0])}–${shortDate(days[days.length - 1])}`;
 }
+
+/** "21,5 °C"; a missing reading is a dash. */
+export function celsius(value: number | null | undefined, decimals = 1): string {
+  return value === null || value === undefined ? '–' : `${number(value, decimals)} °C`;
+}
+
+/** Relative humidity, "45 %". */
+export function humidity(value: number | null | undefined): string {
+  return value === null || value === undefined ? '–' : `${Math.round(value)} %`;
+}
+
+export interface ZonedParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  weekday: number;
+}
+
+const zoned = new Intl.DateTimeFormat('en-GB', {
+  timeZone: ZONE, year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+
+/** The Danish wall-clock time of an instant. */
+export function zonedParts(ms: number): ZonedParts {
+  const p = Object.fromEntries(zoned.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  const [year, month, day] = [Number(p.year), Number(p.month), Number(p.day)];
+  return { year, month, day, hour: Number(p.hour), minute: Number(p.minute), weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay() };
+}
+
+/**
+ * The instant of a Danish wall-clock time. Out-of-range fields roll over (day 32 is the 1st of the next month).
+ * In the hour skipped when summer time starts, the result is the hour after.
+ */
+export function zonedToUtc(year: number, month: number, day: number, hour = 0, minute = 0): number {
+  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  const offset = (at: number) => {
+    const p = zonedParts(at);
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - at;
+  };
+  const guess = wall - offset(wall);
+  return wall - offset(guess);
+}
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** "14:05" in Danish time. */
+export function clock(ms: number): string {
+  const p = zonedParts(ms);
+  return `${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+/** "8. nov. 2026" in Danish time. */
+export function fullDate(ms: number): string {
+  const p = zonedParts(ms);
+  return `${p.day}. ${MONTHS[p.month - 1]} ${p.year}`;
+}
+
+/** Short Danish names for chart axes: "man.", "nov.". */
+export function weekdayName(weekday: number): string {
+  return WEEKDAYS[weekday];
+}
+
+export function monthName(month: number): string {
+  return MONTHS[month - 1];
+}
+
+/** "kl. 14:05" for a time today, "8/11 kl. 14:05" for an earlier day. */
+export function measuredAt(utc: string | null | undefined, now: Date = new Date()): string {
+  if (!utc) return 'ukendt tidspunkt';
+  const ms = new Date(utc).getTime();
+  return today(new Date(ms)) === today(now) ? `kl. ${clock(ms)}` : dateTime(utc);
+}

@@ -15,7 +15,7 @@ public static class EnergyMcpSetup
         if (AuthSetup.IsNone(builder.Configuration))
         {
             // Without sign-in the app is private by network, and so is /mcp: no OAuth to configure.
-            builder.Services.AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithTools<EnergyTools>();
+            AddTools(builder);
             return;
         }
 
@@ -54,7 +54,16 @@ public static class EnergyMcpSetup
             .AddRequirements(new RoleRequirement(false))
             .RequireAssertion(c => c.User.FindAll("scope").Concat(c.User.FindAll("scp"))
                 .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Contains(scope)));
-        builder.Services.AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithTools<EnergyTools>();
+        AddTools(builder);
+    }
+
+    private static void AddTools(WebApplicationBuilder builder)
+    {
+        var mcp = builder.Services.AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithTools<EnergyTools>();
+        if (HeatPump.HeatPumpEndpoints.IsEnabled(builder.Configuration))
+        {
+            mcp.WithTools<HeatPump.HeatPumpTools>();
+        }
     }
 
     public static void MapEnergyMcp(this WebApplication app)

@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { PropertyCosts } from './Pricing';
-import { api, type DayValue } from './api';
+import { api, type DayValue, type HeatPumpDevice } from './api';
 import { BarChart, type Bar } from './BarChart';
 import { AlertList, ErrorNote, StatusBadge, useLoad } from './common';
-import { addDays, daysBetween, hourLabel, kWh, longDate, percent, shortDate, today } from './format';
+import { addDays, celsius, dateTime, daysBetween, hourLabel, humidity, kWh, longDate, measuredAt, number, percent, shortDate, today } from './format';
+import { OnlineBadge } from './HeatPump';
+import { label } from './sensibo';
 
 type Mode = 'day' | 'week' | 'month' | 'custom';
 
@@ -43,6 +45,30 @@ function HourChart({ propertyId, day }: { propertyId: string; day: string }) {
   return <BarChart bars={bars} height={180} ariaLabel={`Timeforbrug ${longDate(day)}`} />;
 }
 
+/** The heat pump in the property, as of the server's last collection. */
+export function HeatPumpCard({ device }: { device: HeatPumpDevice }) {
+  const target =
+    device.targetTemperature === null
+      ? ''
+      : ` · ${number(device.targetTemperature, Number.isInteger(device.targetTemperature) ? 0 : 1)} °${device.temperatureUnit === 'F' ? 'F' : 'C'}`;
+  const state = device.on === null ? 'Ukendt' : device.on ? `Tændt${device.mode ? ` · ${label(device.mode)}` : ''}${target}` : 'Slukket';
+  return (
+    <section className="card heatpump-card" aria-label={`Varmepumpe: ${device.name}`}>
+      <div className="card-head">
+        <h2>Varmepumpe</h2>
+        <OnlineBadge online={device.online} detail={!device.online && device.lastSeenUtc ? `sidst set ${dateTime(device.lastSeenUtc)}` : undefined} />
+      </div>
+      <p className="hero">{celsius(device.temperature)}</p>
+      <p className="card-date">Inde · {device.name} · målt {measuredAt(device.measuredAtUtc)}</p>
+      <dl className="stats">
+        <div><dt>Luftfugtighed</dt><dd>{humidity(device.humidity)}</dd></div>
+        <div><dt>Drift</dt><dd>{state}</dd></div>
+      </dl>
+      <p className="card-foot-link"><a href="#/varmepumpe">Betjen varmepumpen ›</a></p>
+    </section>
+  );
+}
+
 export function PropertyDetail({ id }: { id: string }) {
   const [mode, setMode] = useState<Mode>('month');
   const [to, setTo] = useState(() => addDays(today(), -1));
@@ -54,6 +80,9 @@ export function PropertyDetail({ id }: { id: string }) {
   const properties = useLoad(() => api.properties(), 'properties');
   const daily = useLoad(() => api.daily(id, from, to), `${id}|${from}|${to}`);
   const alerts = useLoad(() => api.propertyAlerts(id), `alerts|${id}`);
+  const heatpumpOn = features.data?.heatpump ?? false;
+  const heatpump = useLoad(() => (heatpumpOn ? api.heatpump() : Promise.resolve(null)), `heatpump|${heatpumpOn}`);
+  const devices = heatpump.data?.devices.filter((d) => d.propertyId === id) ?? [];
   const property = properties.data?.find((p) => p.id === id);
 
   const choose = (next: Exclude<Mode, 'custom'>) => {
@@ -97,6 +126,8 @@ export function PropertyDetail({ id }: { id: string }) {
           <p className="muted">Seneste komplette døgn: {longDate(property.latestComplete.date)} · {kWh(property.latestComplete.kWh)}</p>
         )}
       </div>
+
+      {devices.map((d) => <HeatPumpCard key={d.id} device={d} />)}
 
       <div className="controls">
         <div className="segmented" role="group" aria-label="Periode">

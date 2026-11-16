@@ -6,6 +6,7 @@ using EnergyMonitor.Web.Pricing;
 using EnergyMonitor.Core.Model;
 using EnergyMonitor.FakeUpstreams;
 using EnergyMonitor.Tests.Core;
+using EnergyMonitor.Web.HeatPump;
 using EnergyMonitor.Web.Jobs;
 using EnergyMonitor.Web.Storage;
 using Microsoft.Extensions.Time.Testing;
@@ -50,6 +51,38 @@ public abstract class StorageContract
     }
 
     protected abstract ITableBackend CreateBackend();
+
+    [Fact]
+    public async Task HeatPumpReadings_MergeByTime_AcrossHoursAndMonths()
+    {
+        var store = new HeatPumpStore(CreateBackend());
+        var end = new DateTimeOffset(2026, 11, 1, 0, 30, 0, TimeSpan.Zero);
+        HeatPumpPoint Point(DateTimeOffset t, double c) => new(t.ToUnixTimeSeconds(), c, 50);
+
+        await store.UpsertAsync("pod", [Point(end.AddHours(-1), 9), Point(end, 10)], default);
+        await store.UpsertAsync("pod", [Point(end, 11), Point(end.AddMinutes(5), 12)], default);
+
+        var all = await store.QueryAsync("pod", end.AddHours(-2), end.AddHours(1), default);
+        Assert.Equal([9, 11, 12], all.Temperature.Select(p => p.Value));
+        Assert.Equal(end.AddHours(-1), all.Temperature[0].Time);
+        Assert.Empty((await store.QueryAsync("other", end.AddHours(-2), end.AddHours(1), default)).Temperature);
+    }
+
+    [Fact]
+    public async Task HeatPumpReadings_OverLongRanges_AreAveragedIntoAtMost720Buckets()
+    {
+        var store = new HeatPumpStore(CreateBackend());
+        var hour = new DateTimeOffset(2026, 11, 14, 10, 0, 0, TimeSpan.Zero);
+        var points = Enumerable.Range(0, 30 * 24 * 12).Select(i => new HeatPumpPoint(hour.AddMinutes(-5 * i).ToUnixTimeSeconds(), i % 2 == 0 ? 10 : 12, null)).ToList();
+        await store.UpsertAsync("pod", points, default);
+
+        var month = await store.QueryAsync("pod", hour.AddDays(-30), hour.AddMinutes(1), default);
+
+        Assert.InRange(month.Temperature.Count, 700, 721);
+        Assert.All(month.Temperature, p => Assert.InRange(p.Value, 10, 12));
+        Assert.Equal(11, month.Temperature[10].Value);
+        Assert.Empty(month.Humidity);
+    }
 
     private static Row R(string pk, string rk, string json = "{}", string? tag = null) => new(pk, rk, json, tag);
 

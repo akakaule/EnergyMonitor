@@ -1,8 +1,8 @@
 import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { PricingSettings } from './Pricing';
-import { api, errorText, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
-import { ErrorNote, StatusBadge, useLoad, type Loaded } from './common';
-import { dateTime } from './format';
+import { api, codeText, errorText, type HeatPumpDevice, type HeatPumpStatus, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
+import { ErrorNote, StatusBadge, Switch, useLoad, type Loaded } from './common';
+import { dateTime, fullDate } from './format';
 
 type Result = { ok: boolean; text: string } | null;
 
@@ -36,6 +36,7 @@ function useAction(): [Result, boolean, (action: () => Promise<unknown>, done: s
 const DRIFT = 'drift';
 const NOTIFICATIONS = 'notifikationer';
 const NEW_PROPERTY = 'ny-ejendom';
+const HEAT_PUMP = 'varmepumpe';
 const propertySection = (id: string) => `ejendom/${id}`;
 const sectionHref = (section: string) => (section === DRIFT ? '#/indstillinger' : `#/indstillinger/${section}`);
 
@@ -100,6 +101,23 @@ function facts(h: Health): { label: string; fact: Fact }[] {
   ];
 }
 
+function Tiles({ items }: { items: { label: string; fact: Fact }[] }) {
+  return (
+    <dl className="tiles">
+      {items.map(({ label, fact }) => (
+        <div key={label} className="tile">
+          <dt>{label}</dt>
+          <dd>
+            <span className={`tone tone-${fact.tone}`} aria-hidden="true">{TONE_ICON[fact.tone]}</span>
+            <span className="tile-value">{fact.value}</span>
+            {fact.detail && <span className="tile-detail">{fact.detail}</span>}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function PanelHead({ title, about, children }: { title: string; about?: ReactNode; children?: ReactNode }) {
   return (
     <header className="panel-head">
@@ -136,20 +154,7 @@ function Operations({ admin, health, hidden }: { admin: boolean; health: Loaded<
       </PanelHead>
       <ResultNote result={result} />
       {health.error && <ErrorNote message={health.error} onRetry={health.reload} />}
-      {h && (
-        <dl className="tiles">
-          {facts(h).map(({ label, fact }) => (
-            <div key={label} className="tile">
-              <dt>{label}</dt>
-              <dd>
-                <span className={`tone tone-${fact.tone}`} aria-hidden="true">{TONE_ICON[fact.tone]}</span>
-                <span className="tile-value">{fact.value}</span>
-                {fact.detail && <span className="tile-detail">{fact.detail}</span>}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
+      {h && <Tiles items={facts(h)} />}
       {admin && (
         <div className="card">
           <h3>Eksport</h3>
@@ -200,15 +205,6 @@ function MeteringPointField({ value, onChange, empty, points }: { value: string;
   );
 }
 
-function Switch({ checked, onChange, children }: { checked: boolean; onChange: (checked: boolean) => void; children: ReactNode }) {
-  return (
-    <label className="switch">
-      <input type="checkbox" role="switch" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <span>{children}</span>
-    </label>
-  );
-}
-
 function NumberField({ label, unit, ...input }: { label: string; unit: string } & InputHTMLAttributes<HTMLInputElement>) {
   return (
     <label className="field">
@@ -225,7 +221,49 @@ const RULES: Record<Rule['type'], { title: string; about: string }> = {
   LowConsumption: { title: 'Lavt forbrug', about: 'Når et døgns forbrug ligger under grænsen.' },
   HighConsumption: { title: 'Højt forbrug', about: 'Når et døgns forbrug ligger over grænsen.' },
   MissingData: { title: 'Manglende data', about: 'Når der ikke kommer nye komplette døgn.' },
+  IndoorTooCold: {
+    title: 'For koldt inde',
+    about: 'Når varmepumpen måler under grænsen inde. Først Observer, derefter Alarm, hvis det varer ved; lukkes, når det er 1 °C over grænsen. Som udgangspunkt en frostalarm under 5 °C med Alarm efter 120 min.',
+  },
+  HeatPumpOffline: { title: 'Varmepumpe offline', about: 'Når varmepumpen ikke har meldt sig hos Sensibo. Som udgangspunkt efter 60 min.' },
 };
+
+// Starting values for rules a server without heat-pump support has not sent parameters for.
+const HEAT_PUMP_DEFAULTS = { minTemperatureC: 5, sustainedMinutes: 120, offlineMinutes: 60 };
+
+function RuleFields({ type, params, set }: { type: Rule['type']; params: Rule['params']; set: (patch: Partial<Rule['params']>) => void }) {
+  const numeric = (value: string) => (value === '' ? 0 : Number(value));
+  switch (type) {
+    case 'MissingData':
+      return <NumberField label="Uden nyt komplet døgn i" unit="timer" min={24} max={720} value={params.missingHours} onChange={(e) => set({ missingHours: numeric(e.target.value) })} />;
+    case 'IndoorTooCold':
+      return (
+        <>
+          <NumberField label="Alarm under" unit="°C" min={-10} max={25} step="0.5" value={params.minTemperatureC ?? HEAT_PUMP_DEFAULTS.minTemperatureC} onChange={(e) => set({ minTemperatureC: numeric(e.target.value) })} />
+          <NumberField label="Alarm efter" unit="min under grænsen" min={0} max={1440} value={params.sustainedMinutes ?? HEAT_PUMP_DEFAULTS.sustainedMinutes} onChange={(e) => set({ sustainedMinutes: numeric(e.target.value) })} />
+        </>
+      );
+    case 'HeatPumpOffline':
+      return <NumberField label="Offline i" unit="min" min={15} max={1440} value={params.offlineMinutes ?? HEAT_PUMP_DEFAULTS.offlineMinutes} onChange={(e) => set({ offlineMinutes: numeric(e.target.value) })} />;
+    default:
+      return (
+        <>
+          <NumberField
+            label={type === 'LowConsumption' ? 'Alarm under' : 'Alarm over'}
+            unit="% af median"
+            min={0}
+            max={1000}
+            value={params.thresholdPercent}
+            onChange={(e) => set({ thresholdPercent: numeric(e.target.value) })}
+          />
+          <NumberField label="Mindste median" unit="kWh/døgn" min={0} max={1000} step="0.5" value={params.minBaselineKWh} onChange={(e) => set({ minBaselineKWh: numeric(e.target.value) })} />
+          {type === 'LowConsumption' && (
+            <NumberField label="Alarm efter" unit="døgn i træk" min={1} max={30} value={params.escalateAfterDays} onChange={(e) => set({ escalateAfterDays: numeric(e.target.value) })} />
+          )}
+        </>
+      );
+  }
+}
 
 function RuleRow({ propertyId, rule, onSaved }: { propertyId: string; rule: Rule; onSaved: () => void }) {
   const [draft, setDraft] = useState(rule);
@@ -233,7 +271,6 @@ function RuleRow({ propertyId, rule, onSaved }: { propertyId: string; rule: Rule
   const titleId = useId();
 
   const set = (patch: Partial<Rule['params']>) => setDraft({ ...draft, params: { ...draft.params, ...patch } });
-  const numeric = (value: string) => (value === '' ? 0 : Number(value));
   const { title, about } = RULES[rule.type];
 
   return (
@@ -244,24 +281,7 @@ function RuleRow({ propertyId, rule, onSaved }: { propertyId: string; rule: Rule
       </div>
       <p className="hint">{about}</p>
       <div className="rule-fields">
-        {rule.type === 'MissingData' ? (
-          <NumberField label="Uden nyt komplet døgn i" unit="timer" min={24} max={720} value={draft.params.missingHours} onChange={(e) => set({ missingHours: numeric(e.target.value) })} />
-        ) : (
-          <>
-            <NumberField
-              label={rule.type === 'LowConsumption' ? 'Alarm under' : 'Alarm over'}
-              unit="% af median"
-              min={0}
-              max={1000}
-              value={draft.params.thresholdPercent}
-              onChange={(e) => set({ thresholdPercent: numeric(e.target.value) })}
-            />
-            <NumberField label="Mindste median" unit="kWh/døgn" min={0} max={1000} step="0.5" value={draft.params.minBaselineKWh} onChange={(e) => set({ minBaselineKWh: numeric(e.target.value) })} />
-            {rule.type === 'LowConsumption' && (
-              <NumberField label="Alarm efter" unit="døgn i træk" min={1} max={30} value={draft.params.escalateAfterDays} onChange={(e) => set({ escalateAfterDays: numeric(e.target.value) })} />
-            )}
-          </>
-        )}
+        <RuleFields type={rule.type} params={draft.params} set={set} />
       </div>
       <div className="actions">
         <button type="button" className="button button-small" disabled={busy} onClick={async () => (await run(() => api.saveRule(propertyId, draft), 'Gemt.')) && onSaved()}>
@@ -273,8 +293,9 @@ function RuleRow({ propertyId, rule, onSaved }: { propertyId: string; rule: Rule
   );
 }
 
-function PropertySettings({ property, points, pricing, hidden, onSaved }: { property: PropertySummary; points: Points; pricing: boolean; hidden: boolean; onSaved: () => void }) {
-  const rules = useLoad(() => api.rules(property.id), `rules|${property.id}`);
+function PropertySettings({ property, points, pricing, rulesVersion, hidden, onSaved }: { property: PropertySummary; points: Points; pricing: boolean; rulesVersion: number; hidden: boolean; onSaved: () => void }) {
+  // Linking a heat pump adds rules, so the list is fetched again when links change.
+  const rules = useLoad(() => api.rules(property.id), `rules|${property.id}|${rulesVersion}`);
   const [name, setName] = useState(property.name);
   const [monitoring, setMonitoring] = useState(property.monitoringEnabled);
   const [point, setPoint] = useState('');
@@ -469,6 +490,108 @@ function NotificationForm({ initial }: { initial: NotificationSettings }) {
   );
 }
 
+function heatPumpFacts(h: HeatPumpStatus): { label: string; fact: Fact }[] {
+  const count = h.devices.length === 1 ? '1 varmepumpe' : `${h.devices.length} varmepumper`;
+  return [
+    {
+      label: 'Forbindelse',
+      fact: !h.configured
+        ? { value: 'Ikke sat op', detail: 'Serveren mangler en Sensibo API-nøgle', tone: 'warn' }
+        : h.lastError
+          ? { value: 'Fejl', detail: details(codeText(h.lastError), h.lastAttemptAtUtc !== null && `Seneste forsøg ${dateTime(h.lastAttemptAtUtc)}`), tone: 'error' }
+          : h.lastSuccessAtUtc
+            ? { value: 'Forbundet', detail: count, tone: 'ok' }
+            : { value: 'Venter på første måling', tone: 'neutral' },
+    },
+    {
+      label: 'Sidste måling',
+      fact: h.lastSuccessAtUtc
+        ? { value: dateTime(h.lastSuccessAtUtc), detail: `Hentes hvert ${h.intervalMinutes}. minut`, tone: 'ok' }
+        : { value: 'Ingen endnu', tone: 'neutral' },
+    },
+    {
+      label: 'Historik siden',
+      fact: h.oldestUtc
+        ? { value: fullDate(new Date(h.oldestUtc).getTime()), detail: 'Uge, måned og år kan vises', tone: 'ok' }
+        : { value: 'Ingen endnu', detail: 'Kun Sensibos seneste døgn kan vises', tone: 'neutral' },
+    },
+  ];
+}
+
+function HeatPumpLinks({ devices, properties, onSaved }: { devices: HeatPumpDevice[]; properties: PropertySummary[]; onSaved: () => void }) {
+  const [links, setLinks] = useState<Record<string, string>>(() => Object.fromEntries(devices.map((d) => [d.id, d.propertyId ?? ''])));
+  const [result, busy, run] = useAction();
+  const save = () => api.saveHeatpumpLinks(devices.map((d) => ({ deviceId: d.id, propertyId: links[d.id] || null })));
+
+  return (
+    <div className="card">
+      <h3>Ejendomme</h3>
+      <p className="hint">
+        En varmepumpe, der hører til en ejendom, vises på ejendommens side, og ejendommen får alarmerne For koldt inde og Varmepumpe offline.
+      </p>
+      {devices.length === 0 ? (
+        <p className="empty">Ingen varmepumper fundet endnu.</p>
+      ) : (
+        <div className="fields">
+          {devices.map((d) => (
+            <label key={d.id} className="field">
+              {d.name}
+              <select value={links[d.id] ?? ''} onChange={(e) => setLinks({ ...links, [d.id]: e.target.value })}>
+                <option value="">Ingen</option>
+                {properties.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+      )}
+      <div className="actions">
+        <button type="button" className="button" disabled={busy || devices.length === 0} onClick={async () => (await run(save, 'Gemt.')) && onSaved()}>
+          Gem tilknytning
+        </button>
+        <ResultNote result={result} />
+      </div>
+    </div>
+  );
+}
+
+function HeatPumpSettings({ status, properties, hidden, onLinked }: { status: Loaded<HeatPumpStatus | null>; properties: PropertySummary[]; hidden: boolean; onLinked: () => void }) {
+  const [result, busy, run] = useAction();
+  const h = status.data;
+  return (
+    <section className="panel" hidden={hidden}>
+      <PanelHead title="Varmepumpe" about="Målinger fra Sensibo, og hvilken ejendom hver varmepumpe hører til.">
+        <button
+          type="button"
+          className="button"
+          disabled={busy || !h?.configured}
+          onClick={async () => {
+            if (await run(() => api.collectHeatpump(), 'Målingerne hentes nu.')) window.setTimeout(status.reload, 4000);
+          }}
+        >
+          Hent nu
+        </button>
+      </PanelHead>
+      <ResultNote result={result} />
+      {status.error && <ErrorNote message={status.error} onRetry={status.reload} />}
+      {h && <Tiles items={heatPumpFacts(h)} />}
+      {h && (
+        <HeatPumpLinks
+          // A device that appears later gets a fresh form; saving keeps the form and its result.
+          key={h.devices.map((d) => d.id).join('|')}
+          devices={h.devices}
+          properties={properties}
+          onSaved={() => {
+            status.reload();
+            onLinked();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
 const ICONS = {
   drift: <path d="M3 12h4l2.5-6 5 12 2.5-6H21" />,
   bell: (
@@ -485,6 +608,13 @@ const ICONS = {
     </>
   ),
   plus: <path d="M12 6v12M6 12h12" />,
+  heatpump: (
+    <>
+      <rect x="3" y="5" width="18" height="12" rx="2" />
+      <circle cx="10" cy="11" r="3.5" />
+      <path d="M16.5 8.5v5M6 17v2.5M18 17v2.5" />
+    </>
+  ),
 };
 
 /** The coloured dot repeats what the second line says in words, so colour is never the only signal. */
@@ -521,6 +651,13 @@ function notificationState(h: Health | null): MenuState | undefined {
   return { text: 'Telegram er sat op' };
 }
 
+function heatPumpState(h: HeatPumpStatus | null): MenuState | undefined {
+  if (!h) return undefined;
+  if (!h.configured) return { text: 'Ikke sat op', tone: 'warn' };
+  if (h.lastError) return { text: 'Hentning fejlede', tone: 'error' };
+  return { text: h.lastSuccessAtUtc ? `Målt ${dateTime(h.lastSuccessAtUtc)}` : 'Ingen målinger endnu' };
+}
+
 const STATUS_TONE: Record<PropertySummary['status'], Tone> = { Normal: 'ok', Observer: 'warn', Alarm: 'error', DataMissing: 'neutral' };
 
 function propertyState(p: PropertySummary): MenuState {
@@ -531,6 +668,9 @@ function propertyState(p: PropertySummary): MenuState {
 
 export function Settings({ me, section }: { me: Me; section?: string }) {
   const features = useLoad(() => api.features(), 'features');
+  const heatpumpOn = features.data?.heatpump ?? false;
+  const heatpump = useLoad(() => (heatpumpOn ? api.heatpump() : Promise.resolve(null)), `heatpump|${heatpumpOn}`);
+  const [linksSaved, setLinksSaved] = useState(0);
   const admin = me.role === 'admin';
   const properties = useLoad(() => api.properties(), 'properties');
   // Loaded once here: the Drift panel shows it in full, the menu summarises it.
@@ -551,10 +691,16 @@ export function Settings({ me, section }: { me: Me; section?: string }) {
   const known = (wanted: string) =>
     list ? list.some((p) => propertySection(p.id) === wanted) || wanted === propertySection(created ?? '') : !properties.error;
   const active =
-    admin && section && (section === NOTIFICATIONS || section === NEW_PROPERTY || (section.startsWith('ejendom/') && known(section)))
+    admin &&
+    section &&
+    (section === NOTIFICATIONS ||
+      section === NEW_PROPERTY ||
+      (section === HEAT_PUMP && (heatpumpOn || features.loading)) ||
+      (section.startsWith('ejendom/') && known(section)))
       ? section
       : DRIFT;
-  const waiting = active.startsWith('ejendom/') && !list?.some((p) => propertySection(p.id) === active);
+  const waiting =
+    (active.startsWith('ejendom/') && !list?.some((p) => propertySection(p.id) === active)) || (active === HEAT_PUMP && !heatpumpOn);
 
   // On a phone the menu is a row that scrolls sideways; keep the current section in view.
   const menu = useRef<HTMLElement | null>(null);
@@ -574,6 +720,7 @@ export function Settings({ me, section }: { me: Me; section?: string }) {
             <p className="nav-group">System</p>
             <MenuLink section={DRIFT} active={active} icon="drift" label="Drift" state={driftState(health.data)} />
             <MenuLink section={NOTIFICATIONS} active={active} icon="bell" label="Notifikationer" state={notificationState(health.data)} />
+            {heatpumpOn && <MenuLink section={HEAT_PUMP} active={active} icon="heatpump" label="Varmepumpe" state={heatPumpState(heatpump.data)} />}
             <p className="nav-group">Ejendomme</p>
             {list?.map((p) => (
               <MenuLink key={p.id} section={propertySection(p.id)} active={active} icon="house" label={p.name} state={propertyState(p)} />
@@ -594,6 +741,7 @@ export function Settings({ me, section }: { me: Me; section?: string }) {
                   property={p}
                   points={points}
                   pricing={features.data?.pricing ?? false}
+                  rulesVersion={linksSaved}
                   hidden={active !== propertySection(p.id)}
                   onSaved={properties.reload}
                 />
@@ -608,6 +756,14 @@ export function Settings({ me, section }: { me: Me; section?: string }) {
                 }}
               />
               <Notifications hidden={active !== NOTIFICATIONS} />
+              {heatpumpOn && (
+                <HeatPumpSettings
+                  status={heatpump}
+                  properties={list ?? []}
+                  hidden={active !== HEAT_PUMP}
+                  onLinked={() => setLinksSaved((n) => n + 1)}
+                />
+              )}
             </>
           )}
         </div>

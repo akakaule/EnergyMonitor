@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError, errorText, type PropertySummary } from './api';
 import { parseRoute } from './App';
 import { BarChart, niceScale } from './BarChart';
-import { addDays, age, dateTime, dayRange, daysBetween, kWh, longDate, percent, shortDate, today } from './format';
+import { addDays, age, celsius, dateTime, dayRange, daysBetween, humidity, kWh, longDate, measuredAt, percent, shortDate, today, zonedToUtc } from './format';
 import { Overview, PropertyCard } from './Overview';
 
 afterEach(() => {
@@ -32,6 +32,28 @@ describe('format', () => {
     expect(age(null)).toBe('ingen målinger');
   });
 
+  it('formats indoor climate the Danish way', () => {
+    expect(celsius(21.54)).toBe('21,5 °C');
+    expect(celsius(-2)).toBe('−2,0 °C');
+    expect(celsius(null)).toBe('–');
+    expect(humidity(45.4)).toBe('45 %');
+    expect(humidity(undefined)).toBe('–');
+  });
+
+  it('says when a reading was taken, with the date only when it was not today', () => {
+    const now = new Date('2026-11-08T12:00:00Z');
+    expect(measuredAt('2026-11-08T07:05:00Z', now)).toBe('kl. 08:05');
+    expect(measuredAt('2026-11-07T07:05:00Z', now)).toBe('7/11 kl. 08:05');
+    expect(measuredAt(null, now)).toBe('ukendt tidspunkt');
+  });
+
+  it('turns Danish wall-clock times into instants on both sides of summer time', () => {
+    expect(new Date(zonedToUtc(2026, 3, 29, 0)).toISOString()).toBe('2026-03-28T23:00:00.000Z');
+    expect(new Date(zonedToUtc(2026, 3, 29, 12)).toISOString()).toBe('2026-03-29T10:00:00.000Z');
+    expect(new Date(zonedToUtc(2026, 10, 25, 12)).toISOString()).toBe('2026-10-25T11:00:00.000Z');
+    expect(new Date(zonedToUtc(2026, 12, 32)).toISOString()).toBe('2026-12-31T23:00:00.000Z');
+  });
+
   it('does calendar arithmetic across month ends and DST changes', () => {
     expect(addDays('2026-10-31', 1)).toBe('2026-11-01');
     expect(addDays('2026-03-01', -1)).toBe('2026-02-28');
@@ -54,6 +76,9 @@ describe('routing and errors', () => {
     expect(parseRoute('#/ejendom/sommerhus')).toEqual({ page: 'property', id: 'sommerhus' });
     expect(parseRoute('#/indstillinger')).toEqual({ page: 'settings' });
     expect(parseRoute('#/ejendom/../x')).toEqual({ page: 'overview' });
+    expect(parseRoute('#/varmepumpe')).toEqual({ page: 'heatpump' });
+    expect(parseRoute('#/varmepumpe/')).toEqual({ page: 'heatpump' });
+    expect(parseRoute('#/varmepumpe/x')).toEqual({ page: 'overview' });
   });
 
   it('parses a section of the settings screen', () => {

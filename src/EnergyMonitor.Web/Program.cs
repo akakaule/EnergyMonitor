@@ -7,6 +7,7 @@ using EnergyMonitor.Web.Api;
 using EnergyMonitor.Web.Pricing;
 using EnergyMonitor.Web.Auth;
 using EnergyMonitor.Web.Eloverblik;
+using EnergyMonitor.Web.HeatPump;
 using EnergyMonitor.Web.Jobs;
 using EnergyMonitor.Web.Notifications;
 using EnergyMonitor.Web.Storage;
@@ -23,7 +24,7 @@ if (args is ["copy-tables", ..])
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
-// Secrets (Eloverblik--RefreshToken, Telegram--BotToken, Auth--ClientSecret) come from Key Vault through
+// Secrets (Eloverblik--RefreshToken, Telegram--BotToken, Sensibo--ApiKey, Auth--ClientSecret) come from Key Vault through
 // the app's managed identity. Reloading lets a renewed Eloverblik token take effect without a restart.
 if (builder.Configuration["KeyVault:Uri"] is { Length: > 0 } vaultUri)
 {
@@ -111,6 +112,7 @@ builder.Services.AddHttpClient("spotprices", client =>
     client.BaseAddress = new Uri(builder.Configuration["Pricing:BaseUrl"] ?? "https://api.energidataservice.dk/");
     client.Timeout = TimeSpan.FromSeconds(100);
 });
+builder.AddHeatPump();
 builder.AddEnergyMonitorAuth();
 builder.AddEnergyMcp();
 builder.Services.ConfigureApiChallenges();
@@ -151,6 +153,7 @@ app.MapDefaultEndpoints();
 app.MapAuthEndpoints();
 app.MapApi();
 app.MapPricing();
+app.MapHeatPump();
 app.MapEnergyMcp();
 app.MapFallback("/api/{**rest}", () => Results.NotFound()).AllowAnonymous();
 app.MapFallbackToFile("index.html").AllowAnonymous();

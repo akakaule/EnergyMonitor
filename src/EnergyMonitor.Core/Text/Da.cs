@@ -18,6 +18,21 @@ public static class Da
     public static string Percent(double value) =>
         value.ToString("0.#", CultureInfo.InvariantCulture).Replace('.', ',') + " %";
 
+    public static string Celsius(double value) =>
+        value.ToString("0.0", CultureInfo.InvariantCulture).Replace('.', ',').Replace('-', '−') + " °C";
+
+    /// <summary>A Sensibo mode (<c>heat</c>, <c>cool</c>, …) in Danish, lower case.</summary>
+    public static string HeatPumpMode(string? mode) => mode switch
+    {
+        "heat" => "varme",
+        "cool" => "køl",
+        "fan" => "ventilator",
+        "dry" => "affugt",
+        "auto" => "auto",
+        null or "" => "ukendt tilstand",
+        _ => mode,
+    };
+
     public static string ShortDate(DateOnly date) => $"{date.Day}/{date.Month}";
 
     public static string LongDate(DateOnly date) => $"{date.Day}. {Months[date.Month - 1]}";

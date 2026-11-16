@@ -88,7 +88,8 @@ public sealed class ConsumptionStore(ITableBackend tables) : IConsumptionStore
 }
 
 /// <summary>
-/// Events: partition <c>{property}</c>, row <c>{ruleType}|{firstDay}</c>. Creation is insert-if-absent,
+/// Events: partition <c>{property}</c>, row <c>{ruleType}|{firstDay}</c> (plus <c>|{sequence}</c> for a second
+/// event of a heat pump rule on the same day). Creation is insert-if-absent,
 /// which is what stops a repeated sync or a restart from raising the same event twice.
 /// </summary>
 public sealed class AlertStore(ITableBackend tables) : IAlertStore
@@ -96,7 +97,8 @@ public sealed class AlertStore(ITableBackend tables) : IAlertStore
     private const string Rules = "rules";
     private const string Events = "events";
 
-    private static string EventRk(RuleType type, DateOnly first) => $"{type}|{StoreJson.Day(first)}";
+    private static string EventRk(RuleType type, DateOnly first, int sequence) =>
+        sequence == 0 ? $"{type}|{StoreJson.Day(first)}" : $"{type}|{StoreJson.Day(first)}|{sequence}";
 
     public async Task<IReadOnlyList<AlertRule>> GetRulesAsync(string propertyId, CancellationToken ct) =>
         [.. (await tables.QueryAsync(Rules, propertyId, null, null, null, ct)).Select(StoreJson.Read<AlertRule>)];
@@ -108,8 +110,8 @@ public sealed class AlertStore(ITableBackend tables) : IAlertStore
         [.. (await tables.QueryAsync(Events, propertyId, null, null, null, ct)).Select(StoreJson.Read<AlertEvent>)];
 
     public async Task<AlertEvent?> GetEventAsync(string id, CancellationToken ct) =>
-        AlertEvent.TryParseId(id, out var propertyId, out var type, out var first)
-        && await tables.GetAsync(Events, propertyId, EventRk(type, first), ct) is { } row
+        AlertEvent.TryParseId(id, out var propertyId, out var type, out var first, out var sequence)
+        && await tables.GetAsync(Events, propertyId, EventRk(type, first, sequence), ct) is { } row
             ? StoreJson.Read<AlertEvent>(row)
             : null;
 
@@ -122,7 +124,7 @@ public sealed class AlertStore(ITableBackend tables) : IAlertStore
     public async Task DeleteAllAsync(string propertyId, CancellationToken ct) =>
         await tables.DeleteAsync(Events, await tables.QueryAsync(Events, propertyId, null, null, null, ct), ct);
 
-    private static Row ToRow(AlertEvent e) => new(e.PropertyId, EventRk(e.RuleType, e.FirstLocalDate), StoreJson.Write(e));
+    private static Row ToRow(AlertEvent e) => new(e.PropertyId, EventRk(e.RuleType, e.FirstLocalDate, e.Sequence), StoreJson.Write(e));
 }
 
 public sealed class SyncRunStore(ITableBackend tables) : ISyncRunStore
