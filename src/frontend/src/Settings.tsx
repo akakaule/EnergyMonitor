@@ -226,7 +226,6 @@ const RULES: Record<Rule['type'], { title: string; about: string }> = {
     about: 'Når varmepumpen måler under grænsen inde. Først Observer, derefter Alarm, hvis det varer ved; lukkes, når det er 1 °C over grænsen. Som udgangspunkt en frostalarm under 5 °C med Alarm efter 120 min.',
   },
   HeatPumpOffline: { title: 'Varmepumpe offline', about: 'Når varmepumpen ikke har meldt sig hos Sensibo. Som udgangspunkt efter 60 min.' },
-  SensiboFailure: { title: 'Sensibo-fejl', about: 'Når serveren gentagne gange ikke kan hente målinger fra Sensibo.' },
 };
 
 // Starting values for rules a server without heat-pump support has not sent parameters for.
@@ -246,8 +245,6 @@ function RuleFields({ type, params, set }: { type: Rule['type']; params: Rule['p
       );
     case 'HeatPumpOffline':
       return <NumberField label="Offline i" unit="min" min={15} max={1440} value={params.offlineMinutes ?? HEAT_PUMP_DEFAULTS.offlineMinutes} onChange={(e) => set({ offlineMinutes: numeric(e.target.value) })} />;
-    case 'SensiboFailure':
-      return <NumberField label="Alarm efter" unit="fejlede hentninger i træk" min={1} max={100} value={params.consecutiveFailures} onChange={(e) => set({ consecutiveFailures: numeric(e.target.value) })} />;
     default:
       return (
         <>

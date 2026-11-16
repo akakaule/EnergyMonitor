@@ -143,14 +143,12 @@ public sealed partial class AlertService(
         var now = time.GetUtcNow();
         if (status.ConsecutiveFailures == 0)
         {
-            foreach (var link in await heatPumps.GetLinksAsync(ct))
+            var links = await heatPumps.GetLinksAsync(ct);
+            foreach (var property in await properties.ListAsync(ct))
             {
-                if (await properties.GetAsync(link.PropertyId, ct) is not { } property
-                    || status.Devices.FirstOrDefault(d => d.DeviceId == link.DeviceId) is not { } reading)
-                {
-                    continue;
-                }
-
+                // No reading (not linked, or the pump is gone from Sensibo) closes what is still open.
+                var deviceId = links.FirstOrDefault(l => l.PropertyId == property.Id)?.DeviceId;
+                var reading = status.Devices.FirstOrDefault(d => d.DeviceId == deviceId);
                 var rules = await summaries.GetRulesAsync(property.Id, ct);
                 var existing = await alerts.GetEventsAsync(property.Id, ct);
                 var result = HeatPumpRules.EvaluateProperty(property, rules, reading, existing, now, LocalDay.Zone(property.TimeZone));

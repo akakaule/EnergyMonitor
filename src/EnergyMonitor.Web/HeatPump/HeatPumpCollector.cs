@@ -18,6 +18,8 @@ public sealed partial class HeatPumpCollector(
     TimeProvider time,
     ILogger<HeatPumpCollector> logger)
 {
+    public const string InternalError = "internal_error";
+
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public bool IsRunning => _gate.CurrentCount == 0;
@@ -75,6 +77,13 @@ public sealed partial class HeatPumpCollector(
                 status = previous with { LastAttemptAtUtc = now, LastError = ex.Code, ConsecutiveFailures = previous.ConsecutiveFailures + 1 };
                 LogFailed(logger, ex.Code, status.ConsecutiveFailures);
             }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Storage or anything else: still a failed collection, so it is counted (and alarmed on after a
+                // few) instead of aborting the scheduler tick and silently stopping the monitoring.
+                status = previous with { LastAttemptAtUtc = now, LastError = InternalError, ConsecutiveFailures = previous.ConsecutiveFailures + 1 };
+                LogUnexpected(logger, status.ConsecutiveFailures, ex);
+            }
 
             await state.SetStatusAsync(status, ct);
             await alerts.EvaluateHeatPumpAsync(status, ct);
@@ -107,6 +116,9 @@ public sealed partial class HeatPumpCollector(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Heat pump collection failed ({ErrorCode}), {Failures} in a row")]
     private static partial void LogFailed(ILogger logger, string errorCode, int failures);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Heat pump collection failed unexpectedly, {Failures} in a row")]
+    private static partial void LogUnexpected(ILogger logger, int failures, Exception ex);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Manual heat pump collection failed")]
     private static partial void LogBackgroundFailed(ILogger logger, Exception ex);

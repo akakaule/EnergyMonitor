@@ -49,7 +49,8 @@ public sealed class SensiboClient(IHttpClientFactory httpClientFactory, IOptions
 {
     public const string HttpClientName = "sensibo";
 
-    private const string PodFields = "id,room,acState,measurements,connectionStatus,temperatureUnit";
+    // mainMeasurementsSensor is a paired Room Sensor; when there is one, it is the room temperature (as on the page).
+    private const string PodFields = "id,room,acState,measurements,mainMeasurementsSensor,connectionStatus,temperatureUnit";
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(options.CurrentValue.ApiKey);
 
@@ -123,24 +124,28 @@ public sealed class SensiboClient(IHttpClientFactory httpClientFactory, IOptions
         {
             throw new SensiboException(SensiboException.Timeout, "Sensibo did not answer in time.", ex);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
             throw new SensiboException(SensiboException.Error, "Sensibo sent an unreadable answer.", ex);
         }
     }
 
-    private static HeatPumpReading ToReading(Pod pod) => new(
-        pod.Id!,
-        pod.Room?.Name is { Length: > 0 } name ? name : pod.Id!,
-        pod.Measurements?.Temperature,
-        pod.Measurements?.Humidity,
-        ParseTime(pod.Measurements?.Time?.Time),
-        pod.ConnectionStatus?.IsAlive ?? false,
-        ParseTime(pod.ConnectionStatus?.LastSeen?.Time),
-        pod.AcState?.On,
-        pod.AcState?.Mode,
-        pod.AcState?.TargetTemperature,
-        pod.AcState?.TemperatureUnit ?? pod.TemperatureUnit);
+    private static HeatPumpReading ToReading(Pod pod)
+    {
+        var measurements = pod.MainMeasurementsSensor?.Measurements ?? pod.Measurements;
+        return new HeatPumpReading(
+            pod.Id!,
+            pod.Room?.Name is { Length: > 0 } name ? name : pod.Id!,
+            measurements?.Temperature,
+            measurements?.Humidity,
+            ParseTime(measurements?.Time?.Time),
+            pod.ConnectionStatus?.IsAlive ?? false,
+            ParseTime(pod.ConnectionStatus?.LastSeen?.Time),
+            pod.AcState?.On,
+            pod.AcState?.Mode,
+            pod.AcState?.TargetTemperature,
+            pod.AcState?.TemperatureUnit ?? pod.TemperatureUnit);
+    }
 
     // Sensibo sends UTC timestamps, sometimes without an offset.
     private static DateTimeOffset? ParseTime(string? time) =>
@@ -148,7 +153,10 @@ public sealed class SensiboClient(IHttpClientFactory httpClientFactory, IOptions
 
     private sealed record Envelope<T>(T? Result);
 
-    private sealed record Pod(string? Id, Room? Room, AcState? AcState, Measurements? Measurements, ConnectionStatus? ConnectionStatus, string? TemperatureUnit);
+    private sealed record Pod(
+        string? Id, Room? Room, AcState? AcState, Measurements? Measurements, Sensor? MainMeasurementsSensor, ConnectionStatus? ConnectionStatus, string? TemperatureUnit);
+
+    private sealed record Sensor(Measurements? Measurements);
 
     private sealed record Room(string? Name);
 

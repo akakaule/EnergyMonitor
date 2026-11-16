@@ -16,6 +16,9 @@ public sealed class FakeSensibo
 
     public double Humidity { get; set; } = 62;
 
+    /// <summary>A Sensibo Room Sensor paired with the pod; Sensibo then reports it as <c>mainMeasurementsSensor</c>.</summary>
+    public double? RoomSensorTemperature { get; set; }
+
     public bool Online { get; set; } = true;
 
     /// <summary>Every call answers 503.</summary>
@@ -41,6 +44,7 @@ public sealed class FakeSensibo
     {
         Temperature = 10.5;
         Humidity = 62;
+        RoomSensorTemperature = null;
         Online = true;
         Down = false;
         KeyRejected = false;
@@ -235,7 +239,12 @@ public static class FakeSensiboApp
                 ["feelsLike"] = fake.Temperature,
                 ["time"] = Seen(measuredAt, now),
             },
-            ["mainMeasurementsSensor"] = null,
+            ["mainMeasurementsSensor"] = fake.RoomSensorTemperature is { } room
+                ? new JsonObject
+                {
+                    ["measurements"] = new JsonObject { ["temperature"] = room, ["humidity"] = fake.Humidity, ["time"] = Seen(measuredAt, now) },
+                }
+                : null,
             ["remoteCapabilities"] = FakeSensibo.RemoteCapabilities(),
             ["connectionStatus"] = new JsonObject { ["isAlive"] = fake.Online, ["lastSeen"] = Seen(measuredAt, now) },
             ["temperatureUnit"] = "C",

@@ -127,6 +127,12 @@ public static partial class HeatPumpEndpoints
                     return Results.BadRequest(new { error = "unknown_property" });
                 }
 
+                // The rules judge one pump per house; two would open and close each other's alarms.
+                if (links.Any(l => l.PropertyId == link.PropertyId))
+                {
+                    return Results.BadRequest(new { error = "property_taken" });
+                }
+
                 links.Add(new HeatPumpLink(link.DeviceId, link.PropertyId));
             }
 

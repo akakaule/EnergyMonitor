@@ -95,7 +95,7 @@ public static class ReportComposer
         return sb.ToString().ReplaceLineEndings("\n");
     }
 
-    /// <summary>"9,5 °C inde, 60 % fugt. Tændt: varme 10 °C." or "offline (sidst set 14/11 kl. 09:59)."</summary>
+    /// <summary>"9,5 °C inde, 60 % fugt (målt 14/11 kl. 08:55). Tændt: varme 10 °C." or "offline (sidst set 14/11 kl. 09:59)."</summary>
     public static string HeatPumpLine(HeatPumpReading r, TimeZoneInfo zone)
     {
         if (!r.Online)
@@ -107,6 +107,12 @@ public static class ReportComposer
         if (r.Humidity is { } h)
         {
             text += $", {Da.Percent(Math.Round(h))} fugt";
+        }
+
+        // Always say when: after a Sensibo outage the last reading may be days old.
+        if (r.MeasuredAtUtc is { } measured)
+        {
+            text += $" (målt {HeatPumpRules.LastSeen(measured, zone)})";
         }
 
         return text + r.On switch

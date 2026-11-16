@@ -115,6 +115,21 @@ public class HeatPumpRulesTests
     }
 
     [Fact]
+    public void DisablingTheRule_OrUnlinkingThePump_ClosesItsOpenEvents()
+    {
+        var lastSeen = Now.AddHours(-5);
+        var cold = Assert.Single(Evaluate(Reading(1, Now), [], Now).Created);
+        var offline = Assert.Single(Evaluate(Reading(1, lastSeen, online: false, lastSeen), [], Now).Created);
+
+        var disabled = Evaluate(Reading(1, Now.AddMinutes(15)), [cold, offline], Now.AddMinutes(15), enabled: false);
+        var unlinked = HeatPumpRules.EvaluateProperty(TestData.Sommerhus(), [], null, [cold, offline], Now.AddMinutes(15), TestData.Zone);
+
+        Assert.Equal(2, disabled.Updated.Count(e => e.State == AlertState.Closed));
+        Assert.Equal(2, unlinked.Updated.Count(e => e.State == AlertState.Closed));
+        Assert.Empty(unlinked.Created);
+    }
+
+    [Fact]
     public void DisabledRules_RaiseNothing()
     {
         var lastSeen = Now.AddHours(-5);
@@ -175,7 +190,8 @@ public class HeatPumpRulesTests
 
         var report = ReportComposer.DailyReport(Today, [summary], [], null, heatPumps);
 
-        Assert.Contains("Sommerhus · varmepumpe: 9,5 °C inde, 60 % fugt. Tændt: varme 10 °C.", report, StringComparison.Ordinal);
+        // When it was measured, so a reading from before a Sensibo outage is never taken for today's.
+        Assert.Contains("Sommerhus · varmepumpe: 9,5 °C inde, 60 % fugt (målt 14/11 kl. 11:00). Tændt: varme 10 °C.", report, StringComparison.Ordinal);
     }
 
     [Fact]

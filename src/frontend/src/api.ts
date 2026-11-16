@@ -77,8 +77,8 @@ export interface RuleParams {
   offlineMinutes?: number;
 }
 
-/** IndoorTooCold and HeatPumpOffline exist for properties with a linked heat pump; SensiboFailure is system-wide. */
-export type RuleType = 'LowConsumption' | 'HighConsumption' | 'MissingData' | 'IndoorTooCold' | 'HeatPumpOffline' | 'SensiboFailure';
+/** A property's rules. IndoorTooCold and HeatPumpOffline exist for a property with a linked heat pump. */
+export type RuleType = 'LowConsumption' | 'HighConsumption' | 'MissingData' | 'IndoorTooCold' | 'HeatPumpOffline';
 
 export interface Rule {
   id: string;
@@ -297,6 +297,8 @@ const ERRORS: Record<string, string> = {
   http_503: 'Eloverblik (DataHub) er midlertidigt utilgængelig.',
   network_error: 'Der er ingen forbindelse til Eloverblik.',
   unknown_property: 'Ejendommen findes ikke.',
+  property_taken: 'En ejendom kan kun have én varmepumpe.',
+  internal_error: 'Serveren kunne ikke gemme målingerne. Se loggen.',
   sensibo_not_configured: 'Der er ikke sat en Sensibo API-nøgle op på serveren.',
   sensibo_key_rejected: 'Sensibo afviste API-nøglen. Den skal udskiftes på serveren.',
   sensibo_rate_limited: 'Sensibo begrænser antallet af kald lige nu. Vent et minut, og prøv igen.',

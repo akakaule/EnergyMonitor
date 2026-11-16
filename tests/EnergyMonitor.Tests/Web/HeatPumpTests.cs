@@ -227,6 +227,60 @@ public class HeatPumpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task OnePropertyTakesOneHeatPump()
+    {
+        using var admin = _app.ClientFor(AppFactory.Admin);
+
+        var response = await admin.PutAsJsonAsync("/api/admin/heatpump/links", new
+        {
+            links = new[] { new { deviceId = FakeSensibo.DeviceId, propertyId = "sommerhus" }, new { deviceId = "Pod2Sove", propertyId = "sommerhus" } },
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("property_taken", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnlinkingThePump_ClosesItsAlarm_SoTheHouseDoesNotStayInAlarm()
+    {
+        await _app.LinkHeatPumpAsync();
+        _app.Fake.ApplyScenario("offline");
+        await _app.CollectHeatPumpAsync();
+        Assert.Equal(AlertState.Open, Assert.Single(await HeatPumpEventsAsync()).State);
+
+        await _app.Get<HeatPumpStateService>().SetLinksAsync([], default);
+        await _app.CollectHeatPumpAsync(TimeSpan.FromMinutes(15));
+
+        Assert.Equal(AlertState.Closed, Assert.Single(await HeatPumpEventsAsync()).State);
+    }
+
+    [Fact]
+    public async Task ARoomSensor_IsWhatThePageShowsAndTheAlarmsJudge()
+    {
+        await _app.LinkHeatPumpAsync();
+        _app.Fake.Locked(() => _app.Fake.Sensibo.RoomSensorTemperature = 3.0);
+
+        await _app.CollectHeatPumpAsync();
+
+        var e = Assert.Single(await HeatPumpEventsAsync());
+        Assert.Equal((RuleType.IndoorTooCold, 3.0), (e.RuleType, e.Observed));
+        using var viewer = _app.ClientFor(AppFactory.Viewer);
+        Assert.Equal(3.0, (await viewer.GetJsonAsync("/api/heatpump")).GetProperty("devices")[0].GetProperty("temperature").GetDouble());
+    }
+
+    [Fact]
+    public async Task AStorageFailure_IsCountedAsAFailedCollection_AndTheTickStillDelivers()
+    {
+        using var app = new AppFactory(new FailingTable("heatpump", new InMemoryTableBackend()), heatpump: true);
+        await app.SeedPropertiesAsync();
+
+        await app.Get<SchedulerService>().TickAsync(default);
+
+        using var viewer = app.ClientFor(AppFactory.Viewer);
+        Assert.Equal("internal_error", (await viewer.GetJsonAsync("/api/heatpump")).GetProperty("lastError").GetString());
+    }
+
+    [Fact]
     public async Task CollectNow_RunsInTheBackground()
     {
         using var admin = _app.ClientFor(AppFactory.Admin);
@@ -332,7 +386,7 @@ public class HeatPumpTests : IAsyncLifetime
 
         var report = await _app.Get<ReportService>().ComposeAsync(default);
 
-        Assert.Contains("Sommerhus · varmepumpe: 10,5 °C inde, 62 % fugt. Tændt: varme 10 °C.", report, StringComparison.Ordinal);
+        Assert.Contains("Sommerhus · varmepumpe: 10,5 °C inde, 62 % fugt (målt 8/11 kl. 08:04). Tændt: varme 10 °C.", report, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -398,6 +452,25 @@ public class HeatPumpTests : IAsyncLifetime
         Assert.Contains("\"propertyName\":\"Sommerhus\"", text, StringComparison.Ordinal);
         Assert.Contains("\"temperature\":10.5", text, StringComparison.Ordinal);
     }
+}
+
+/// <summary>A backend whose writes to one table fail, as a full disk or a locked file would.</summary>
+internal sealed class FailingTable(string table, ITableBackend inner) : ITableBackend
+{
+    public Task<Row?> GetAsync(string t, string pk, string rk, CancellationToken ct) => inner.GetAsync(t, pk, rk, ct);
+
+    public Task UpsertAsync(string t, IReadOnlyCollection<Row> rows, CancellationToken ct) =>
+        t == table ? throw new IOException("disk full") : inner.UpsertAsync(t, rows, ct);
+
+    public Task<bool> TryAddAsync(string t, Row row, CancellationToken ct) => inner.TryAddAsync(t, row, ct);
+
+    public Task DeleteAsync(string t, IReadOnlyCollection<Row> rows, CancellationToken ct) => inner.DeleteAsync(t, rows, ct);
+
+    public Task<IReadOnlyList<Row>> QueryAsync(string t, string pk, string? rkFrom, string? rkTo, int? take, CancellationToken ct) =>
+        inner.QueryAsync(t, pk, rkFrom, rkTo, take, ct);
+
+    public Task<IReadOnlyList<Row>> QueryPartitionsAsync(string t, string pkFrom, string pkTo, CancellationToken ct) =>
+        inner.QueryPartitionsAsync(t, pkFrom, pkTo, ct);
 }
 
 public sealed class HeatPumpStoreTests

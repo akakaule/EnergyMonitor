@@ -16,16 +16,35 @@ public static class HeatPumpRules
     /// <summary>The collector's error code for an API key Sensibo refuses.</summary>
     public const string KeyRejected = "sensibo_key_rejected";
 
+    /// <summary>
+    /// Evaluates a property's heat pump rules on its latest <paramref name="reading"/>. Without a reading (the pump
+    /// was unlinked or is gone) or with a rule disabled, that rule's open event is closed, so the house never stays
+    /// in alarm about something nobody watches any more.
+    /// </summary>
     public static RuleEvaluation EvaluateProperty(
         Property property,
         IReadOnlyList<AlertRule> rules,
-        HeatPumpReading reading,
+        HeatPumpReading? reading,
         IReadOnlyList<AlertEvent> existing,
         DateTimeOffset now,
         TimeZoneInfo zone)
     {
         var work = new RuleEngine.WorkingSet(existing);
         var today = LocalDay.Of(now, zone);
+
+        foreach (var type in AlertRule.HeatPumpRuleTypes)
+        {
+            var watched = reading is not null && rules.Any(r => r.Type == type && r.Enabled);
+            if (!watched && Open(work, property.Id, type) is { } orphan)
+            {
+                work.Update(orphan with { State = AlertState.Closed, ClosedAtUtc = now });
+            }
+        }
+
+        if (reading is null)
+        {
+            return work.ToResult();
+        }
 
         if (rules.FirstOrDefault(r => r.Type == RuleType.IndoorTooCold) is { Enabled: true } cold
             && reading.Online && reading.TemperatureC is { } temperature)
