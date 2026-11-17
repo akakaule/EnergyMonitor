@@ -188,12 +188,13 @@ public sealed class OutboxStore(ITableBackend tables) : IOutboxStore
         }
     }
 
-    public async Task RecordFailureAsync(string id, string error, CancellationToken ct)
+    public async Task RecordFailureAsync(string id, string error, IReadOnlyList<string> deliveredTo, IReadOnlyList<string> rejectedBy, CancellationToken ct)
     {
         if (await tables.GetAsync(Table, Pk, id, ct) is { Tag: Pending } row)
         {
             var message = StoreJson.Read<OutboxMessage>(row);
-            await tables.UpsertAsync(Table, [row with { Json = StoreJson.Write(message with { Attempts = message.Attempts + 1, LastError = error }) }], ct);
+            var updated = message with { Attempts = message.Attempts + 1, LastError = error, DeliveredTo = deliveredTo, RejectedBy = rejectedBy };
+            await tables.UpsertAsync(Table, [row with { Json = StoreJson.Write(updated) }], ct);
         }
     }
 }

@@ -162,14 +162,15 @@ Requires Docker with Compose and Tailscale (with MagicDNS and HTTPS certificates
 ```sh
 git clone https://github.com/akakaule/EnergyMonitor.git && cd EnergyMonitor/deploy/local
 az login --use-device-code && ../../scripts/pull-secrets.sh && az logout   # writes .env (mode 600) from Key Vault
-mkdir -p data && sudo chown 1654 data      # 1654 is the app user inside the image
+mkdir -p data && sudo chown 1654 data && sudo chmod 750 data   # 1654 is the app user inside the image
+sed -i "s/^TAILNET_HOST=.*/TAILNET_HOST=$(tailscale status --json | jq -r .Self.DNSName | sed 's/\.$//')/" .env   # the only Host name the app answers, besides localhost
 # Moving from Azure: put the copied energymonitor.db into data/ first (see below)
 docker compose up -d --build
 sudo tailscale serve --bg 8080             # https://<machine>.<tailnet>.ts.net
 ```
 
 - **Storage** is one SQLite file, `deploy/local/data/energymonitor.db` (`Storage:Mode=Sqlite`, `Storage:Path`).
-- **Backup**: copy the file while the app runs with `sqlite3 data/energymonitor.db ".backup 'backup.db'"` (e.g. nightly from cron to another disk), or use Indstillinger → *Hent eksport*.
+- **Backup**: `scripts/backup-db.sh` copies the file while the app runs, checks the copy, keeps 30 days in `~/backups/energymonitor` (readable by you only) and sends a Telegram message if it fails. Run it nightly from cron or a systemd user timer, and copy the backups to another disk. Indstillinger → *Hent eksport* is a JSON export with masked metering point ids.
 - **Update**: `git pull && docker compose up -d --build`.
 - **Token renewed** in the vault: run `scripts/pull-secrets.sh` again (it keeps the other settings in `.env`), then `docker compose up -d`. Without `az` on the machine, run the script on one that has it and send the file over the tailnet: `tailscale file cp .env <machine>:`.
 - **Logs**: `docker compose logs -f`.

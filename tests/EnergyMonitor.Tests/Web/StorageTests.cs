@@ -235,8 +235,11 @@ public abstract class StorageContract
 
         Assert.True(await store.TryEnqueueAsync(message, default));
         Assert.False(await store.TryEnqueueAsync(message, default));
-        await store.RecordFailureAsync(message.Id, "Telegram answered 500.", default);
-        Assert.Equal((1, "Telegram answered 500."), ((await store.ListPendingAsync(default))[0].Attempts, (await store.ListPendingAsync(default))[0].LastError));
+        await store.RecordFailureAsync(message.Id, "Telegram answered 500.", ["1000"], ["3000"], default);
+        var pending = Assert.Single(await store.ListPendingAsync(default));
+        Assert.Equal((1, "Telegram answered 500."), (pending.Attempts, pending.LastError));
+        Assert.Equal(["1000"], pending.DeliveredTo);
+        Assert.Equal(["3000"], pending.RejectedBy);
 
         await store.MarkSentAsync(message.Id, default);
 

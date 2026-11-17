@@ -30,11 +30,18 @@ public interface INotificationChannel
     /// <summary>True when the channel has what it needs (credentials, recipients) to send.</summary>
     bool IsConfigured(NotificationSettings settings);
 
-    /// <summary>Sends to every recipient. Throws <see cref="NotificationException"/> when delivery fails.</summary>
-    Task SendAsync(NotificationMessage message, NotificationSettings settings, CancellationToken ct);
+    /// <summary>
+    /// Sends to one recipient. Throws <see cref="NotificationException"/> when delivery fails, with
+    /// <see cref="NotificationException.Permanent"/> set when retrying cannot help (unknown chat, bot blocked).
+    /// </summary>
+    Task SendAsync(NotificationMessage message, string recipient, CancellationToken ct);
 }
 
-public sealed class NotificationException(string message, Exception? inner = null) : Exception(message, inner);
+public sealed class NotificationException(string message, Exception? inner = null, bool permanent = false) : Exception(message, inner)
+{
+    /// <summary>The recipient rejected the message; sending it again will fail the same way.</summary>
+    public bool Permanent { get; } = permanent;
+}
 
 public interface IPropertyStore
 {
@@ -108,5 +115,9 @@ public interface IOutboxStore
 
     Task MarkSentAsync(string id, CancellationToken ct);
 
-    Task RecordFailureAsync(string id, string error, CancellationToken ct);
+    /// <summary>
+    /// Records a delivery attempt that left the message pending: the error, and the recipients that are done
+    /// with it (delivered, or rejected it for good) so a retry goes only to the others.
+    /// </summary>
+    Task RecordFailureAsync(string id, string error, IReadOnlyList<string> deliveredTo, IReadOnlyList<string> rejectedBy, CancellationToken ct);
 }

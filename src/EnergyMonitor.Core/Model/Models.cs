@@ -271,12 +271,18 @@ public sealed record HeatPumpReading(
 
 public sealed record NotificationMessage(string Text);
 
+/// <summary>
+/// A queued notification. <see cref="DeliveredTo"/> and <see cref="RejectedBy"/> are the recipients that are
+/// done with it, so a retry after a partial failure never sends the message to anyone twice.
+/// </summary>
 public sealed record OutboxMessage(
     string Id,
     string Text,
     DateTimeOffset CreatedAtUtc,
     int Attempts = 0,
-    string? LastError = null);
+    string? LastError = null,
+    IReadOnlyList<string>? DeliveredTo = null,
+    IReadOnlyList<string>? RejectedBy = null);
 
 public sealed record NotificationSettings(bool DailyReportEnabled, IReadOnlyList<string> Recipients)
 {

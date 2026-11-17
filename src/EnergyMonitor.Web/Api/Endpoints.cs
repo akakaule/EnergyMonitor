@@ -251,18 +251,30 @@ public static partial class Endpoints
 
         admin.MapPost("/notifications/test", async (INotificationChannel channel, NotificationSettingsService settings, TimeProvider time, CancellationToken ct) =>
         {
-            try
+            var current = await settings.GetAsync(ct);
+            if (!channel.IsConfigured(current))
             {
-                var local = TimeZoneInfo.ConvertTime(time.GetUtcNow(), LocalDay.Zone(Property.DefaultTimeZone));
-                await channel.SendAsync(
-                    new NotificationMessage($"Energy Monitor · testbesked sendt {local:dd/MM} kl. {local:HH:mm}. Notifikationer virker."),
-                    await settings.GetAsync(ct), ct);
-                return Results.Ok(new { ok = true });
+                return Results.Json(new { ok = false, error = "Notifications are not configured (credentials or recipients missing)." }, statusCode: StatusCodes.Status502BadGateway);
             }
-            catch (NotificationException ex)
+
+            var local = TimeZoneInfo.ConvertTime(time.GetUtcNow(), LocalDay.Zone(Property.DefaultTimeZone));
+            var message = new NotificationMessage($"Energy Monitor · testbesked sendt {local:dd/MM} kl. {local:HH:mm}. Notifikationer virker.");
+            var errors = new List<string>();
+            foreach (var recipient in current.Recipients)
             {
-                return Results.Json(new { ok = false, error = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
+                try
+                {
+                    await channel.SendAsync(message, recipient, ct);
+                }
+                catch (NotificationException ex)
+                {
+                    errors.Add($"{recipient}: {ex.Message}");
+                }
             }
+
+            return errors.Count == 0
+                ? Results.Ok(new { ok = true })
+                : Results.Json(new { ok = false, error = string.Join(" ", errors) }, statusCode: StatusCodes.Status502BadGateway);
         });
 
         admin.MapGet("/settings/notifications", async (NotificationSettingsService settings, CancellationToken ct) =>
@@ -374,7 +386,9 @@ public static partial class Endpoints
             {
                 exported.Add(new
                 {
-                    property,
+                    // The export is a download that can travel; like everywhere else in the API, it carries
+                    // only the masked metering point id. The full id is personal data and stays in storage.
+                    property = property with { MeteringPointId = string.IsNullOrEmpty(property.MeteringPointId) ? property.MeteringPointId : EloverblikClient.Mask(property.MeteringPointId) },
                     pricing = await pricing.GetConfigurationAsync(property.Id, ct),
                     priceSources = await pricing.GetSourcesAsync(property.Id, ct),
                     rules = await summaries.GetRulesAsync(property.Id, ct),

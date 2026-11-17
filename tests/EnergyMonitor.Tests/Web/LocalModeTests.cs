@@ -38,6 +38,24 @@ public class LocalModeTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData("/%23/indstillinger", "/#/indstillinger")]
+    [InlineData("https://evil.example/", "/")]
+    [InlineData("//evil.example", "/")]
+    [InlineData("/%5Cevil.example", "/")]
+    [InlineData("/%09/evil.example", "/")] // browsers strip the tab and land on //evil.example
+    [InlineData("/%0A/evil.example", "/")]
+    public async Task Login_RedirectsOnlyToLocalPaths(string returnUrl, string expected)
+    {
+        using var app = new AppFactory(local: true);
+        using var client = app.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await client.GetAsync($"/auth/login?returnUrl={returnUrl}");
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal(expected, response.Headers.Location?.OriginalString);
+    }
+
     [Fact]
     public async Task Mcp_IsOpen_WithoutOAuthSettings()
     {

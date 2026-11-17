@@ -10,3 +10,7 @@ src/EnergyMonitor.Web/wwwroot/
 infra/
 tests/
 *.md
+
+# Secrets and data of the local deployment never belong in an image.
+deploy/local/.env
+deploy/local/data/

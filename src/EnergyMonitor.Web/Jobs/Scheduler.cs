@@ -20,7 +20,24 @@ public sealed partial class OutboxDispatcher(
     /// <summary>A message nobody could be told about for this long is dropped rather than sent late.</summary>
     public static readonly TimeSpan MaxAge = TimeSpan.FromHours(72);
 
+    // The scheduler tick, the sync pipeline and the heat pump collector all dispatch. One at a time, so two
+    // of them never read the same pending message and both send it.
+    private readonly SemaphoreSlim gate = new(1, 1);
+
     public async Task<int> DispatchAsync(CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            return await DispatchPendingAsync(ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<int> DispatchPendingAsync(CancellationToken ct)
     {
         var pending = await outbox.ListPendingAsync(ct);
         if (pending.Count == 0)
@@ -44,16 +61,38 @@ public sealed partial class OutboxDispatcher(
                 continue;
             }
 
-            try
+            // Each recipient gets the message once: those it was delivered to, or who rejected it for good,
+            // are skipped when a partial failure is retried.
+            var delivered = (message.DeliveredTo ?? []).ToList();
+            var rejected = (message.RejectedBy ?? []).ToList();
+            string? retryable = null;
+            foreach (var recipient in current.Recipients.Where(r => !delivered.Contains(r) && !rejected.Contains(r)))
             {
-                await channel.SendAsync(new NotificationMessage(message.Text), current, ct);
+                try
+                {
+                    await channel.SendAsync(new NotificationMessage(message.Text), recipient, ct);
+                    delivered.Add(recipient);
+                }
+                catch (NotificationException ex) when (ex.Permanent)
+                {
+                    rejected.Add(recipient);
+                    LogRejected(logger, message.Id, recipient, ex.Message);
+                }
+                catch (NotificationException ex)
+                {
+                    retryable ??= ex.Message;
+                }
+            }
+
+            if (retryable is null)
+            {
                 await outbox.MarkSentAsync(message.Id, ct);
                 sent++;
             }
-            catch (NotificationException ex)
+            else
             {
-                await outbox.RecordFailureAsync(message.Id, ex.Message, ct);
-                LogFailed(logger, message.Id, message.Attempts + 1, ex.Message);
+                await outbox.RecordFailureAsync(message.Id, retryable, delivered, rejected, ct);
+                LogFailed(logger, message.Id, message.Attempts + 1, retryable);
             }
         }
 
@@ -62,6 +101,9 @@ public sealed partial class OutboxDispatcher(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Notification {MessageId} failed (attempt {Attempt}) and stays queued: {Reason}")]
     private static partial void LogFailed(ILogger logger, string messageId, int attempt, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Notification {MessageId} was rejected by recipient {Recipient} and is not retried for it: {Reason}")]
+    private static partial void LogRejected(ILogger logger, string messageId, string recipient, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Notification {MessageId} was never delivered and has expired")]
     private static partial void LogExpired(ILogger logger, string messageId);

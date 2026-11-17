@@ -29,34 +29,34 @@ public sealed class TelegramChannel(IHttpClientFactory httpFactory, IOptionsMoni
     public bool IsConfigured(NotificationSettings settings) =>
         !string.IsNullOrWhiteSpace(options.CurrentValue.BotToken) && settings.Recipients.Count > 0;
 
-    public async Task SendAsync(NotificationMessage message, NotificationSettings settings, CancellationToken ct)
+    public async Task SendAsync(NotificationMessage message, string recipient, CancellationToken ct)
     {
         var o = options.CurrentValue;
-        if (!IsConfigured(settings))
+        if (string.IsNullOrWhiteSpace(o.BotToken))
         {
-            throw new NotificationException("Telegram is not configured (bot token or recipients missing).");
+            throw new NotificationException("Telegram is not configured (bot token missing).");
         }
 
         var url = $"{o.BaseUrl.TrimEnd('/')}/bot{o.BotToken}/sendMessage";
-        foreach (var chatId in settings.Recipients)
+        HttpResponseMessage response;
+        try
         {
-            HttpResponseMessage response;
-            try
-            {
-                response = await httpFactory.CreateClient(HttpClientName).PostAsJsonAsync(url, new { chat_id = chatId, text = message.Text }, ct);
-            }
-            catch (Exception ex) when (ex is HttpRequestException || (ex is TaskCanceledException && !ct.IsCancellationRequested))
-            {
-                // The exception is not passed on: its message can carry the request URL, and the URL carries the token.
-                throw new NotificationException("Telegram could not be reached.");
-            }
+            response = await httpFactory.CreateClient(HttpClientName).PostAsJsonAsync(url, new { chat_id = recipient, text = message.Text }, ct);
+        }
+        catch (Exception ex) when (ex is HttpRequestException || (ex is TaskCanceledException && !ct.IsCancellationRequested))
+        {
+            // The exception is not passed on: its message can carry the request URL, and the URL carries the token.
+            throw new NotificationException("Telegram could not be reached.");
+        }
 
-            using (response)
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
             {
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new NotificationException($"Telegram answered {(int)response.StatusCode}.");
-                }
+                // 400 (unknown chat) and 403 (bot blocked or removed) concern this recipient only and will not
+                // go away by retrying. Anything else (bad token, 429, 5xx) may, so it stays retryable.
+                var status = (int)response.StatusCode;
+                throw new NotificationException($"Telegram answered {status}.", permanent: status is 400 or 403);
             }
         }
     }

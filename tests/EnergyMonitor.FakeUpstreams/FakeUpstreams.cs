@@ -31,6 +31,12 @@ public sealed class FakeState
 
     public bool TelegramDown { get; set; }
 
+    /// <summary>Chats that answer 403, as when a recipient has blocked the bot.</summary>
+    public HashSet<string> TelegramBlockedChats { get; } = [];
+
+    /// <summary>Chats that answer 500, a failure that may pass.</summary>
+    public HashSet<string> TelegramFailingChats { get; } = [];
+
     public Dictionary<string, double> BaseKWhPerDay { get; } = new() { [Hjem] = 15.8, [Sommerhus] = 7.4 };
 
     /// <summary>Multiplier for one day of one metering point, e.g. 0.15 for an unusually low day.</summary>
@@ -233,12 +239,18 @@ public static class FakeUpstreamsApp
                     return Results.NotFound();
                 }
 
-                if (state.TelegramDown)
+                var chatId = body?["chat_id"]?.ToString() ?? "";
+                if (state.TelegramDown || state.TelegramFailingChats.Contains(chatId))
                 {
                     return Results.Json(new { ok = false, description = "Internal Server Error" }, statusCode: 500);
                 }
 
-                state.TelegramMessages.Add((body?["chat_id"]?.ToString() ?? "", body?["text"]?.ToString() ?? ""));
+                if (state.TelegramBlockedChats.Contains(chatId))
+                {
+                    return Results.Json(new { ok = false, description = "Forbidden: bot was blocked by the user" }, statusCode: 403);
+                }
+
+                state.TelegramMessages.Add((chatId, body?["text"]?.ToString() ?? ""));
                 return Results.Json(new { ok = true });
             });
         });

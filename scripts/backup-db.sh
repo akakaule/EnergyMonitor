@@ -11,6 +11,8 @@
 # Restore: docker compose down, copy a backup over data/energymonitor.db (delete the -wal and -shm files),
 # chown it to 1654, docker compose up -d.
 set -eu
+# Backups hold consumption history (when the house is empty) and personal ids: readable by this user only.
+umask 077
 
 local_dir=$(cd "$(dirname "$0")/../deploy/local" && pwd)
 db=$local_dir/data/energymonitor.db
@@ -60,6 +62,7 @@ trap on_exit EXIT
 {
   [ -f "$db" ] || { echo "No database at $db." >&2; exit 1; }
   mkdir -p "$dir"
+  chmod 700 "$dir"
 
   target="$dir/energymonitor-$(date +%F).db"
   tmp="$target.tmp"

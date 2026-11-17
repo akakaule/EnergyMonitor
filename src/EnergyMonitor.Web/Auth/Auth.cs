@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 
 namespace EnergyMonitor.Web.Auth;
@@ -248,10 +249,9 @@ public static class AuthSetup
 
         app.MapGet("/auth/login", (string? returnUrl) =>
         {
-            // Only local paths: never redirect to another site after sign-in.
-            var target = returnUrl is { Length: > 0 } && returnUrl[0] == '/' && !returnUrl.StartsWith("//", StringComparison.Ordinal) && !returnUrl.StartsWith("/\\", StringComparison.Ordinal)
-                ? returnUrl
-                : "/";
+            // Only local paths: never redirect to another site after sign-in. IsLocalUrl also rejects the
+            // forms browsers turn into another host, such as "/\t/evil.example" (tabs and newlines are stripped).
+            var target = RedirectHttpResult.IsLocalUrl(returnUrl) ? returnUrl! : "/";
             return dev ? Results.Redirect(target) : Results.Challenge(new AuthenticationProperties { RedirectUri = target });
         }).AllowAnonymous();
 

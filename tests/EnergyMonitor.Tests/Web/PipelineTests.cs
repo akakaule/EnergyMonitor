@@ -287,6 +287,49 @@ public class PipelineTests
     }
 
     [Fact]
+    public async Task OneFailingRecipient_DoesNotMakeTheOthersGetTheMessageAgain()
+    {
+        using var app = await StartAsync();
+        await app.Get<NotificationSettingsService>().SetAsync(new NotificationSettings(true, ["1000", "2000", "3000"]), default);
+        var outbox = app.Get<IOutboxStore>();
+        var dispatcher = app.Get<OutboxDispatcher>();
+        app.Fake.Locked(() => app.Fake.TelegramFailingChats.Add("2000") && app.Fake.TelegramBlockedChats.Add("3000"));
+
+        await outbox.TryEnqueueAsync(new OutboxMessage("test|1", "besked", app.Time.GetUtcNow()), default);
+        await dispatcher.DispatchAsync(default);
+        await dispatcher.DispatchAsync(default);
+
+        // 1000 got it once; 2000 is retried; 3000 blocked the bot and is not retried.
+        var pending = Assert.Single(await outbox.ListPendingAsync(default));
+        Assert.Equal(["1000"], pending.DeliveredTo);
+        Assert.Equal(["3000"], pending.RejectedBy);
+        Assert.Equal("Telegram answered 500.", pending.LastError);
+
+        app.Fake.Locked(() => { app.Fake.TelegramFailingChats.Clear(); return true; });
+        await dispatcher.DispatchAsync(default);
+        await dispatcher.DispatchAsync(default);
+
+        var sent = app.Fake.Locked(() => app.Fake.TelegramMessages.Select(m => m.ChatId).ToList());
+        Assert.Equal(["1000", "2000"], sent);
+        Assert.Empty(await outbox.ListPendingAsync(default));
+    }
+
+    [Fact]
+    public async Task ConcurrentDispatches_SendEachMessageOnce()
+    {
+        using var app = await StartAsync();
+        var dispatcher = app.Get<OutboxDispatcher>();
+        for (var i = 0; i < 5; i++)
+        {
+            await app.Get<IOutboxStore>().TryEnqueueAsync(new OutboxMessage($"test|{i}", $"besked {i}", app.Time.GetUtcNow()), default);
+        }
+
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => dispatcher.DispatchAsync(default))));
+
+        Assert.Equal(5, app.Telegrams.Count);
+    }
+
+    [Fact]
     public async Task Scheduler_RunsEachSlotOnce_InLocalTime_AndSendsOneDailyReport()
     {
         using var app = await StartAsync();

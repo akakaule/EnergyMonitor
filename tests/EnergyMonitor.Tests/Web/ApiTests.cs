@@ -389,6 +389,7 @@ public class ApiTests : IAsyncLifetime
         var export = await admin.GetJsonAsync("/api/admin/export");
         var sommerhus = export.GetProperty("properties")[1];
         Assert.Equal("Sommerhus", sommerhus.GetProperty("property").GetProperty("name").GetString());
+        Assert.StartsWith("…", sommerhus.GetProperty("property").GetProperty("meteringPointId").GetString());
         Assert.Equal(90, sommerhus.GetProperty("days").GetArrayLength());
         Assert.Equal((89 * 24) + 1, sommerhus.GetProperty("intervals").GetArrayLength());
         Assert.Equal(3, sommerhus.GetProperty("rules").GetArrayLength());

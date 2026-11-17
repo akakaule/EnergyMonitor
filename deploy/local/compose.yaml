@@ -20,6 +20,10 @@ services:
       # No proxy in front that could be trusted to report client addresses.
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "false"
       Auth__Mode: None
+      # Only these Host names are answered. Without this, a malicious web page opened in a browser on this
+      # machine could point its own domain at 127.0.0.1 (DNS rebinding) and use the app as the administrator.
+      # Set TAILNET_HOST in .env to the machine's Tailscale name, e.g. energy.example.ts.net.
+      AllowedHosts: ${TAILNET_HOST:?set TAILNET_HOST in .env to the machine's Tailscale name};localhost;127.0.0.1
       Storage__Mode: Sqlite
       Storage__Path: /data/energymonitor.db
     volumes:
