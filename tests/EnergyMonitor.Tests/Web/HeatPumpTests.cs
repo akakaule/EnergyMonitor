@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using EnergyMonitor.Core.Model;
 using EnergyMonitor.FakeUpstreams;
@@ -327,6 +328,35 @@ public class HeatPumpTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Empty(_app.Fake.Locked(() => _app.Fake.Sensibo.Queries.ToList()));
+    }
+
+    [Fact]
+    public async Task Proxy_Writes_MustBeJson()
+    {
+        using var admin = _app.ClientFor(AppFactory.Admin);
+
+        // What a cross-site <form enctype="text/plain"> could send.
+        var response = await admin.PostAsync(AcStates, new StringContent("""{"acState":{"on":false}}""", Encoding.UTF8, "text/plain"));
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.NotEqual(false, _app.Fake.Locked(() => _app.Fake.Sensibo.AcState["on"]?.GetValue<bool>()));
+    }
+
+    [Fact]
+    public async Task Proxy_IsRateLimitedPerUser()
+    {
+        using var app = new AppFactory(heatpump: true);
+        using var viewer = app.ClientFor(AppFactory.Viewer);
+        using var admin = app.ClientFor(AppFactory.Admin);
+        const string pods = "/api/heatpump/sensibo/users/me/pods";
+
+        for (var i = 0; i < HeatPumpEndpoints.ProxyRequestsPerMinute; i++)
+        {
+            Assert.Equal(HttpStatusCode.OK, (await viewer.GetAsync(pods)).StatusCode);
+        }
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await viewer.GetAsync(pods)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync(pods)).StatusCode); // another user has their own allowance
     }
 
     [Fact]

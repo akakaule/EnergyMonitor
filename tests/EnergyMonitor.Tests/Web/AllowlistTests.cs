@@ -36,6 +36,16 @@ public class AllowlistTests
     }
 
     [Fact]
+    public void SignInName_NeverMatches()
+    {
+        // preferred_username can be changed, and chosen by anyone where users sign themselves up.
+        var allowlist = Create((Email, UserRoles.Admin), ("alice", UserRoles.Admin));
+
+        Assert.Null(allowlist.Resolve(Principal(("sub", "9"), ("preferred_username", Email))));
+        Assert.Null(allowlist.Resolve(Principal(("oid", "9"), ("preferred_username", "alice"))));
+    }
+
+    [Fact]
     public void UnverifiedEmail_NeverMatches()
     {
         var allowlist = Create((Email, UserRoles.Admin));

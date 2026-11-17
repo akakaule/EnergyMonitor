@@ -62,10 +62,12 @@ public static class Extensions
                             && !context.Request.Path.StartsWithSegments(AlivenessEndpointPath)
                     )
                     // Telegram Bot API paths contain the bot token (/bot<token>/...), so those calls are not traced.
+                    // Anywhere in the path, not only at the start: a self-hosted Bot API server or a proxy can sit
+                    // under a prefix (https://host/telegram/bot<token>/...).
                     .AddHttpClientInstrumentation(http =>
                         http.FilterHttpRequestMessage = request =>
                             request.RequestUri is null
-                            || !request.RequestUri.AbsolutePath.StartsWith("/bot", StringComparison.OrdinalIgnoreCase));
+                            || !request.RequestUri.AbsolutePath.Contains("/bot", StringComparison.OrdinalIgnoreCase));
             });
 
         builder.AddOpenTelemetryExporters();

@@ -3,9 +3,11 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.RateLimiting;
 using EnergyMonitor.Core.Abstractions;
 using EnergyMonitor.Web.Auth;
 using EnergyMonitor.Web.Storage;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 
@@ -24,13 +26,18 @@ public static partial class HeatPumpEndpoints
     private const int MaxDays = 366;
 
     // Only what the UI uses; anything else (schedules, Airbend, encoded traversal) is refused before Sensibo is called.
-    [GeneratedRegex("^(users/me/pods|pods/[A-Za-z0-9]+(/(acStates(/[A-Za-z]+)?|historicalMeasurements|smartmode|timer/?))?)$")]
+    [GeneratedRegex(@"^(users/me/pods|pods/[A-Za-z0-9]+(/(acStates(/[A-Za-z]+)?|historicalMeasurements|smartmode|timer/?))?)\z")]
     private static partial Regex AllowedPath();
 
     [GeneratedRegex("^[A-Za-z0-9]{1,64}$")]
     private static partial Regex DeviceIdRegex();
 
     public static bool IsEnabled(IConfiguration configuration) => configuration.GetValue<bool>("Sensibo:Enabled");
+
+    /// <summary>Proxy requests per user and minute. The page needs a few per minute; this is far above that.</summary>
+    public const int ProxyRequestsPerMinute = 60;
+
+    private const string ProxyRateLimit = "sensibo-proxy";
 
     public static void AddHeatPump(this WebApplicationBuilder builder)
     {
@@ -49,6 +56,16 @@ public static partial class HeatPumpEndpoints
         builder.Services.AddSingleton<HeatPumpStore>();
         builder.Services.AddSingleton<HeatPumpStateService>();
         builder.Services.AddSingleton<HeatPumpCollector>();
+
+        // The proxy shares the API key, and so Sensibo's rate limit, with the collector. Without a limit one
+        // signed-in user could use it up, and the frost monitoring would run on stale readings.
+        builder.Services.AddRateLimiter(options =>
+        {
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.AddPolicy(ProxyRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
+                context.User.FindFirst("oid")?.Value ?? context.User.FindFirst("sub")?.Value ?? context.User.Identity?.Name ?? "anonymous",
+                _ => new FixedWindowRateLimiterOptions { PermitLimit = ProxyRequestsPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+        });
     }
 
     public static void MapHeatPump(this WebApplication app)
@@ -151,7 +168,7 @@ public static partial class HeatPumpEndpoints
             return Results.Accepted();
         });
 
-        var proxy = app.MapGroup("/api/heatpump/sensibo").RequireAuthorization(AuthSetup.Viewer);
+        var proxy = app.MapGroup("/api/heatpump/sensibo").RequireAuthorization(AuthSetup.Viewer).RequireRateLimiting(ProxyRateLimit);
         proxy.MapGet("/{**path}", ForwardAsync);
         proxy.MapMethods("/{**path}", ["POST", "PUT", "PATCH", "DELETE"], ForwardAsync).RequireAuthorization(AuthSetup.Admin);
     }
@@ -176,6 +193,14 @@ public static partial class HeatPumpEndpoints
         using var upstreamRequest = new HttpRequestMessage(new HttpMethod(request.Method), sensibo.WithKey(path, query));
         if (HttpMethods.IsPost(request.Method) || HttpMethods.IsPut(request.Method) || HttpMethods.IsPatch(request.Method))
         {
+            // Only JSON is forwarded. A cross-site HTML form can send text/plain without a preflight; requiring
+            // JSON keeps such a request from ever reaching the heat pump, independent of the request-header guard.
+            if (!request.HasJsonContentType())
+            {
+                response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+                return;
+            }
+
             using var reader = new StreamReader(request.Body, Encoding.UTF8);
             upstreamRequest.Content = new StringContent(await reader.ReadToEndAsync(context.RequestAborted), Encoding.UTF8, "application/json");
         }

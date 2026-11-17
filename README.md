@@ -109,7 +109,7 @@ The pipeline tests run the real application in-process with a controllable clock
 | `Sensibo:Enabled`, `Sensibo:IntervalMinutes` | The heat pump module (default off) and how often it is recorded (default 15) | App settings / `.env` |
 | `Auth:ClientSecret` | Client secret of the sign-in app registration | Key Vault secret `Auth--ClientSecret` |
 | `Auth:Authority`, `Auth:ClientId` | OIDC provider (Entra ID or any standard OIDC) | Bicep parameters |
-| `Auth:Users:n:Subject` / `:Role` | Allowlist. Subject is an e-mail address the provider reports as verified (Google), or the user's `sub`, object id (`oid`) or sign-in name (Entra ID). Role is `admin` or `viewer` | Bicep parameter `users` |
+| `Auth:Users:n:Subject` / `:Role` | Allowlist. Subject is an e-mail address the provider reports as verified (Google), or the user's `sub` or object id (`oid`, Entra ID). The sign-in name (`preferred_username`) is not accepted: it can change, and with self sign-up it can be chosen. Role is `admin` or `viewer` | Bicep parameter `users` |
 | `Telegram:ChatIds` | Default recipients until they are changed in Indstillinger | Bicep parameter |
 | `Schedule:SyncTimes`, `Schedule:ReportTime` | Danish local times, default `08:00`, `17:00` and `09:00` | App settings |
 | `Sync:BackfillDays`, `Sync:RefetchDays` | Default 90 and 7 | App settings |

@@ -43,8 +43,9 @@ public sealed class AuthOptions
 public sealed class AllowedUser
 {
     /// <summary>
-    /// The user's object id (<c>oid</c>), <c>sub</c>, sign-in name (<c>preferred_username</c>), or an e-mail
-    /// address the provider reports as verified.
+    /// The user's object id (<c>oid</c>), <c>sub</c>, or an e-mail address the provider reports as verified.
+    /// Not the sign-in name (<c>preferred_username</c>): providers let it change, and where users can sign
+    /// themselves up they can choose it, so it could match someone else's entry.
     /// </summary>
     public string Subject { get; set; } = "";
 
@@ -57,7 +58,8 @@ public sealed class AllowedUser
 /// </summary>
 public sealed class Allowlist(IOptionsMonitor<AuthOptions> options)
 {
-    private static readonly string[] SubjectClaims = ["oid", "sub", "preferred_username"];
+    // Identifiers the provider assigns and never reuses. preferred_username is deliberately not one of them.
+    private static readonly string[] SubjectClaims = ["oid", "sub"];
 
     public User? Resolve(ClaimsPrincipal principal)
     {

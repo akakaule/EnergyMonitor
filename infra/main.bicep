@@ -42,7 +42,7 @@ param authAuthority string
 @description('Client (application) id of the app registration used for sign-in.')
 param authClientId string
 
-@description('The household allowlist: object id (oid) or sign-in name, and role admin or viewer.')
+@description('The household allowlist: object id (oid), sub or verified e-mail, and role admin or viewer. Not the sign-in name.')
 param users array
 
 @description('Default Telegram chat ids for notifications. Can be changed later in Settings.')

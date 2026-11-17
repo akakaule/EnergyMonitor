@@ -148,6 +148,10 @@ app.UseStaticFiles();
 app.UseAuthentication();
 app.UseApiGuards();
 app.UseAuthorization();
+if (EnergyMonitor.Web.HeatPump.HeatPumpEndpoints.IsEnabled(app.Configuration))
+{
+    app.UseRateLimiter();
+}
 
 app.MapDefaultEndpoints();
 app.MapAuthEndpoints();
