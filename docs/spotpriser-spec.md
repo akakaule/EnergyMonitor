@@ -1,6 +1,6 @@
-# Elpriser time for time (i dag og i morgen) — specifikation (udkast)
+# Elpriser time for time (i dag og i morgen) — specifikation
 
-Status: **udkast til godkendelse**, 21. november 2026. Intet er implementeret.
+Status: **godkendt og implementeret**, 21. november 2026. Kontrolleret med de falske kilder; ikke afprøvet mod de rigtige tjenester (se afsnit 10).
 
 ## 1. Overblik
 
@@ -12,7 +12,7 @@ Appen henter allerede Energinets day-ahead-priser frem til i overmorgen, men bru
 
 1. **Et priskort på Oversigt** med et søjlediagram over dagens timer, en markering af den aktuelle time, skift mellem *I dag* og *I morgen*, og de billigste og dyreste sammenhængende timer.
 2. **En linje i den daglige rapport kl. 09:00** om resten af dagen: gennemsnit, billigste og dyreste periode.
-3. **En Telegram-besked om eftermiddagen**, når morgendagens priser er klar.
+3. **En Telegram-besked om eftermiddagen**, de dage morgendagens priser skiller sig ud.
 4. **Et MCP-værktøj**, `get_spot_prices`, så Claude kan svare på »hvornår er strømmen billigst i morgen?«.
 
 ### Sådan hænger det sammen
@@ -32,6 +32,8 @@ Energi Data Service (DayAheadPrices, kvarterpriser)
       ▼                ▼                  ▼                  ▼
  GET /api/energy/   priskort på      rapportlinje og     MCP-værktøjet
  {id}/prices        Oversigt         »priser i morgen«   get_spot_prices
+                                     (når de skiller
+                                     sig ud)
 ```
 
 ### De vigtigste valg
@@ -41,13 +43,14 @@ Energi Data Service (DayAheadPrices, kvarterpriser)
 | Hvilken pris vises | **Ca. pris pr. kWh inkl. alt** (spot, elselskabets tillæg, nettarif, afgifter, moms). Ren spotpris vises som en del af tallet. | Nettariffen er flere gange højere kl. 17–21 end om natten. Den billigste *spot*time er derfor ikke altid den billigste time at bruge strøm i. |
 | Opløsning | Timer i diagrammet og i beskederne. Kvarterpriserne gemmes fortsat og udleveres af API'et. | 96 søjler kan ikke læses på en telefon, og husholdningens forbrug planlægges i timer. |
 | »Billigst« | Den sammenhængende periode på 3 timer med laveste gennemsnit (kan indstilles). | En enkelt billig time kan man sjældent bruge til noget; en vask tager 2–3 timer. |
-| Morgendagens priser | Ny synkronisering kun af priser kl. 13:30 og én besked, når morgendagen er komplet. | Priserne offentliggøres normalt lidt efter kl. 13. I dag hentes de først kl. 17:00. |
+| Morgendagens priser | Ny synkronisering kun af priser kl. 13:30. Der sendes kun en besked, når morgendagen skiller sig ud. | Priserne offentliggøres normalt lidt efter kl. 13; før blev de først hentet kl. 17:00. En besked hver dag ville hurtigt blive overset. |
 | Slås til med | Det eksisterende `Pricing:Enabled`. Ingen ny funktionskontakt. | Funktionen er en visning af data, prismodulet allerede henter. |
 
 ### Ikke med i denne omgang
 
 - Automatisk styring af varmepumpen efter prisen.
-- Alarmer ved meget høje eller negative priser (negative timer nævnes dog i beskeden om i morgen).
+- Alarmer i alarmlisten ved høje eller negative priser. De udløser kun beskeden om i morgen.
+- Eget menupunkt med flere dage og historik. Kortet på Oversigt viser i dag og i morgen.
 - Priser før 1. oktober 2025 (importøren understøtter kun kvartermarkedet).
 - Prognoser ud over de offentliggjorte day-ahead-priser.
 
@@ -82,7 +85,7 @@ Abonnementer (kr. pr. dag) indgår ikke: de afhænger ikke af, hvornår strømme
 
 - `status`: `Complete` (alle timer har pris), `Partial` (nogle mangler) eller `Pending` (ingen priser endnu, typisk i morgen før kl. 13).
 - `average`, `min`, `max` af `total`, kun når status er `Complete`.
-- `cheapest` og `mostExpensive`: den sammenhængende periode på `Pricing:WindowHours` timer (standard 3, tilladt 1–6) med laveste og højeste gennemsnit af `total`. Ved lighed vindes af den tidligste. Kan beregnes for hele dagen eller kun fra et givet tidspunkt (»resten af dagen«); er der færre timer tilbage end perioden, udelades de.
+- `cheapest` og `mostExpensive`: den sammenhængende periode på `Pricing:WindowHours` timer (standard 3, tilladt 1–6) med laveste og højeste gennemsnit af `total`. Ved lighed vinder den tidligste. For dags dato søges kun blandt de timer, der ikke er slut endnu (»resten af dagen«, den igangværende time tæller med); er der færre timer tilbage end perioden, udelades de. Gennemsnit, laveste og højeste time gælder altid hele dagen.
 - `negativeHours`: timer, hvor `spot` er under 0.
 - `assumptions`: de samme koder som »ca. pris« (`current_tariffs`, `charges_missing`, `supplier_markup_missing`) plus `no_agreement`, når boligen ikke har en elaftale.
 
@@ -125,45 +128,55 @@ Tallene er, som »ca. pris«, beregnet med dagens tariffer og de registrerede vi
 }
 ```
 
-Tallene i eksemplet er opdigtede. Med `resolution=quarter` returneres kvarterpriserne i stedet for timer; perioderne beregnes stadig på timer.
+Tallene i eksemplet er opdigtede; API'et afrunder ikke. Uden elaftale er `area` tom, `days` tom og `assumptions` `["no_agreement"]`. Kvarterpriserne kan fortsat hentes med `breakdown`; dette endepunkt giver kun timer.
 
 ## 6. Brugerflade
 
 **Priskort på Oversigt**, under ejendomskortene, kun når `features.pricing` er sat.
 
-- Ét kort pr. prisområde. Boliger i samme område og med samme vilkår deler kort; ellers får hver bolig sit.
-- Overskrift »Elpris«, den aktuelle times pris som stort tal (`2,31 kr./kWh`) og teksten »ca. pris inkl. tariffer, afgifter og moms«.
+- Afsnittet »Elpriser« med ét kort pr. gruppe af boliger, der betaler samme pris time for time (samme område, vilkår og tariffer). Ellers får hver bolig sit kort.
+- Den aktuelle times pris som stort tal (`2,31 kr./kWh`) og teksten »Ca. pris i kr./kWh inkl. elselskabets tillæg, tariffer, afgifter og moms«. For i morgen er det store tal dagens gennemsnit.
 - Valg mellem *I dag* og *I morgen*. *I morgen* viser »Priserne for i morgen kommer normalt lidt efter kl. 13«, indtil de er hentet.
 - Søjlediagram med en søjle pr. time. Den aktuelle time er fremhævet, forløbne timer er nedtonede, og de billigste og dyreste perioder har egen farve og står også som tekst: »Billigst kl. 02–05 · gns. 1,47 kr.« Farve er aldrig den eneste markering.
-- Tryk eller hold over en søjle viser timens pris opdelt i spot, elselskab, nettarif, afgifter og moms.
+- Tryk på en søjle viser timens pris opdelt i spot, elselskab, nettarif, afgifter og moms. Indtil der er valgt en time, vises den igangværende.
 - Antagelser vises som under »ca. pris« (f.eks. manglende tariffer).
 - Kortet genindlæses ved timeskift, mens fanen er synlig.
 
 `BarChart` skal udvides: den antager i dag kWh og værdier på nul eller derover. Den skal kunne formatere andre enheder og tegne negative værdier under en nullinje. Den skal fortsat være læsbar ved 390 px og med skærmlæser (en beskrivelse pr. søjle).
 
-**Indstillinger → Notifikationer** får en afkrydsning »Send elpriser for i morgen«, slået til som standard.
+**Indstillinger → Notifikationer** får kontakten »Send elpriser for i morgen, når de skiller sig ud«, slået til som standard. Den vises kun, når priser er slået til.
 
 ## 7. Telegram
 
 **Linje i den daglige rapport** (kl. 09:00), én pr. prisområde, om timerne fra rapporttidspunktet til midnat:
 
 ```text
-Elpris i dag (Sommerhus, DK1): gns. 2,31 kr./kWh. Billigst kl. 13–16 (1,62), dyrest kl. 17–20 (3,71).
+Elpris i dag (Sommerhus, DK1): gns. 2,31 kr./kWh. Resten af dagen: billigst kl. 13–16 (1,62), dyrest kl. 17–20 (3,71).
 ```
 
-Linjen udelades, hvis dagens priser ikke er komplette. Deler boligerne område og vilkår, nævnes de sammen.
+Linjen udelades, hvis dagens priser ikke er komplette. Deler boligerne område, vilkår og tariffer, nævnes de sammen.
 
-**Besked om i morgen**, sat i kø første gang en prissynkronisering efterlader morgendagen komplet:
+**Besked om i morgen** sendes kun, når morgendagens priser er komplette for alle grupper, og mindst én gruppe skiller sig ud på en af disse måder:
+
+| Anledning | Standard | Linje i beskeden |
+|---|---|---|
+| Negativ spotpris i mindst én time | altid | `2 timer med negativ spotpris.` |
+| Dagens gennemsnit afviger fra gennemsnittet af de seneste 7 dage (i dag medregnet; mindst 3 af dem skal have komplette priser) | 25 % (`Pricing:NotifyDeviationPercent`, 0 slår fra) | `Gennemsnittet er 32 % højere end de seneste dage (1,55 kr./kWh).` |
+| En time koster mindst den høje pris, inkl. alt | 4,00 kr./kWh (`Pricing:NotifyHighPrice`, 0 slår fra) | `Dyreste time: kl. 18–19, 4,35 kr./kWh.` |
 
 ```text
-Energy Monitor · elpriser i morgen, søn. 22. nov.
+Energy Monitor · elpriser i morgen, 22. november
 Sommerhus (DK1): gns. 2,05 kr./kWh. Billigst kl. 02–05 (1,47), dyrest kl. 17–20 (3,40).
 2 timer med negativ spotpris.
+Gennemsnittet er 32 % højere end de seneste dage (1,55 kr./kWh).
 ```
+
+- Vurderingen sker efter hver prissynkronisering (kl. 13:30, kl. 17:00 og »Synkronisér nu«).
+- Med en fastprisaftale varierer gennemsnittet ikke fra dag til dag, så kun negative spotpriser og den høje pris kan udløse beskeden.
 
 - Beskedens id er `prices|<dato>`, så en dag får én besked, uanset hvor mange synkroniseringer der kører.
 - Den går gennem den eksisterende outbox med samme genforsøg og modtagere som rapporten.
-- Er priserne ikke komplette efter synkroniseringen kl. 17:00, sendes ingen besked den dag. Det er ikke en alarm.
+- Er priserne ikke komplette efter dagens sidste synkronisering, sendes ingen besked den dag. Det er ikke en alarm.
 - Tallene i eksemplerne er opdigtede.
 
 ## 8. MCP
@@ -176,6 +189,8 @@ Nyt skrivebeskyttet værktøj `get_spot_prices(propertyId, from, to)` med samme 
 |---|---|---|
 | `Pricing:Enabled` | findes | Slår også denne funktion til. |
 | `Pricing:WindowHours` | `3` | Længden af billigste og dyreste periode, 1–6 timer. |
+| `Pricing:NotifyDeviationPercent` | `25` | Afvigelse fra de seneste dages gennemsnit, der udløser beskeden om i morgen. 0 slår fra. |
+| `Pricing:NotifyHighPrice` | `4.00` | Timepris i kr./kWh inkl. alt, der udløser beskeden om i morgen. 0 slår fra. |
 | `Schedule:PriceSyncTime` | `13:30` | Dansk tid for den ekstra prissynkronisering. Tom slår den fra. |
 | Notifikationer: `TomorrowPricesEnabled` | til | Gemmes sammen med de øvrige notifikationsindstillinger. Eksisterende indstillinger uden feltet læses som slået til. |
 
@@ -186,11 +201,13 @@ Ingen nye tabeller, hemmeligheder eller udgående værter.
 Automatiske test:
 
 - `HourlyPrices`: sommertidsdage med 23 og 25 timer, negative priser, manglende kvarter (timen får ingen pris, dagen bliver `Partial`), tariffer pr. time, fastpris, ingen aftale, lighed mellem perioder, »resten af dagen« med færre timer end perioden.
-- Pipeline med de falske kilder: slot kl. 13:30 kører én gang, beskeden om i morgen sendes én gang efter to synkroniseringer og slet ikke, når morgendagen er ufuldstændig; rapportlinjen udelades uden komplette priser. `FakeUpstreams` får et scenarie, hvor morgendagens priser mangler.
+- Pipeline med de falske kilder: slot kl. 13:30 kører én gang og kalder ikke Eloverblik; beskeden om i morgen sendes én gang efter to synkroniseringer, og slet ikke for en almindelig dag, når morgendagen ikke er offentliggjort, eller når kontakten er slået fra; rapportlinjen udelades uden komplette priser. `FakeUpstreams` har fået et falsk Energi Data Service, der offentliggør morgendagens priser kl. 13, og hvor en dags priser kan skaleres, gøres negative eller holdes tilbage.
 - API: grænser for datoer, 404, lukket uden `Pricing:Enabled`, samme svar gennem HTTP og MCP.
 - Frontend: kortet med komplette, ventende og delvise priser, negative søjler, opdelingen pr. time, 390 px.
 
-Accept: priserne for en konkret dag stemmer med Energi Data Service, og en times `total` kan genfindes ved at lægge delene sammen. Kortet og begge Telegram-beskeder er set i den kørende løsning.
+Status 21. november 2026: 335 backendtest (15 Table Storage-test sprunget over uden Azurite) og 103 frontendtest består, ESLint er ren. Kortet er set i en browser mod den kørende løsning med de falske kilder ved 1280 px og 390 px, lyst og mørkt tema: ingen vandret rulning, alle knapper mindst 40 px høje. Rapportlinjen er set i forhåndsvisningen.
+
+**Mangler stadig** (kræver den rigtige installation): at priserne for en konkret dag stemmer med Energi Data Service, at timeprisen med de rigtige tariffer fra Eloverblik ser rigtig ud mod en regning, og at beskeden om i morgen modtages i Telegram. Tærsklerne på 25 % og 4,00 kr./kWh er startværdier, der bør justeres efter et par uger.
 
 ## 11. Rækkefølge
 
@@ -199,11 +216,11 @@ Accept: priserne for en konkret dag stemmer med Energi Data Service, og en times
 3. Synkronisering kl. 13:30, rapportlinjen og beskeden om i morgen.
 4. MCP-værktøjet, README og implementeringsstatus.
 
-Hvert trin kan tages i brug for sig.
+Alle fire trin er gennemført.
 
-## 12. Åbne spørgsmål
+## 12. Beslutninger (21. november 2026)
 
-1. **Pris inkl. alt eller ren spotpris som hovedtal?** Specifikationen vælger inkl. alt. Det gør tallene afhængige af, at Eloverbliks tariffer og elaftalen er registreret rigtigt.
-2. **Er 3 timer den rigtige periode?** Alternativet er at vise både den billigste enkelttime og den billigste periode.
-3. **Skal beskeden om i morgen komme hver dag,** eller kun når noget skiller sig ud (f.eks. negative timer, eller en forskel mellem billigst og dyrest over en grænse)?
-4. **Eget menupunkt »Elpriser«** med flere dage og historik, eller er kortet på Oversigt nok til en start?
+1. **Hovedtallet er prisen inkl. alt**, ikke ren spotpris. Tallene afhænger derfor af, at Eloverbliks tariffer og elaftalen er registreret rigtigt.
+2. **Perioden er 3 timer.**
+3. **Beskeden om i morgen sendes kun, når noget skiller sig ud.** De tre anledninger og deres tærskler står i afsnit 7; de er valgt under implementeringen og kan ændres i konfigurationen.
+4. **Et kort på Oversigt**, intet eget menupunkt.

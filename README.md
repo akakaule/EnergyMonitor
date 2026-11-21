@@ -1,6 +1,6 @@
 # Energy Monitor
 
-Private monitoring of electricity consumption for a home and a summer house. It imports consumption from Energinet's [Eloverblik Customer API](https://api.eloverblik.dk/CustomerApi/index.html), shows it in a mobile-friendly dashboard (installable as a PWA), sends a daily status report on Telegram, and raises alarms when a day's consumption is unusually low or high, when data stops arriving, or when the data source fails. It also monitors and controls the summer house's heat pump through [Sensibo](https://sensibo.github.io/), records its temperature history, and raises a frost alarm when the house gets too cold (see [Heat pump](#heat-pump-sensibo)).
+Private monitoring of electricity consumption for a home and a summer house. It imports consumption from Energinet's [Eloverblik Customer API](https://api.eloverblik.dk/CustomerApi/index.html), shows it in a mobile-friendly dashboard (installable as a PWA), sends a daily status report on Telegram, and raises alarms when a day's consumption is unusually low or high, when data stops arriving, or when the data source fails. With electricity prices enabled it shows what a kWh costs hour by hour today and tomorrow, and when it is cheapest (see [Hourly prices](#hourly-prices-today-and-tomorrow)). It also monitors and controls the summer house's heat pump through [Sensibo](https://sensibo.github.io/), records its temperature history, and raises a frost alarm when the house gets too cold (see [Heat pump](#heat-pump-sensibo)).
 
 This is the v1 of `energy-monitor-mvp-spec.md`. The user interface and all messages are in Danish; times are `Europe/Copenhagen`.
 
@@ -12,7 +12,7 @@ Eloverblik Customer API        Telegram Bot API        Sensibo API
           │                           │                      │
    ┌──────┴───────────────────────────┴──────────────────────┴──┐
    │ EnergyMonitor.Web (.NET 10, one container)                  │
-   │  · background scheduler: sync 08:00/17:00,                  │
+   │  · background scheduler: sync 08:00/17:00, prices 13:30,    │
    │    report 09:00 (Danish time), heat pump every 15 minutes   │
    │  · rule engine and notification outbox                      │
    │  · HTTP API + the built React PWA          │
@@ -93,8 +93,8 @@ For frontend work, `npm run dev` in `src/frontend` proxies `/api` to the running
 ```sh
 docker run -d --rm -p 10002:10002 mcr.microsoft.com/azure-storage/azurite \
   azurite-table --tableHost 0.0.0.0 --inMemoryPersistence --skipApiVersionCheck
-dotnet test --project tests/EnergyMonitor.Tests     # 177 tests; the 10 Table Storage ones are skipped without Azurite
-cd src/frontend && npm run lint && npm test         # ESLint and 14 component/format tests
+dotnet test --project tests/EnergyMonitor.Tests     # 335 tests; the 15 Table Storage ones are skipped without Azurite
+cd src/frontend && npm run lint && npm test         # ESLint and 103 component/format tests
 ```
 
 The pipeline tests run the real application in-process with a controllable clock, wired to the fake upstreams.
@@ -112,6 +112,9 @@ The pipeline tests run the real application in-process with a controllable clock
 | `Auth:Users:n:Subject` / `:Role` | Allowlist. Subject is an e-mail address the provider reports as verified (Google), or the user's `sub` or object id (`oid`, Entra ID). The sign-in name (`preferred_username`) is not accepted: it can change, and with self sign-up it can be chosen. Role is `admin` or `viewer` | Bicep parameter `users` |
 | `Telegram:ChatIds` | Default recipients until they are changed in Indstillinger | Bicep parameter |
 | `Schedule:SyncTimes`, `Schedule:ReportTime` | Danish local times, default `08:00`, `17:00` and `09:00` | App settings |
+| `Schedule:PriceSyncTime` | Danish local time of the extra fetch of day-ahead prices, default `13:30`; empty turns it off. Only with `Pricing:Enabled` | App settings |
+| `Pricing:WindowHours` | Length of the cheapest and the most expensive period of a day, default 3 (1–6) | App settings |
+| `Pricing:NotifyDeviationPercent`, `Pricing:NotifyHighPrice` | When tomorrow's prices are worth a Telegram message: an average this far from the latest days' (default 25 %), or an hour at this price or more (default 4.00 DKK/kWh incl. VAT). 0 turns either off | App settings |
 | `Sync:BackfillDays`, `Sync:RefetchDays` | Default 90 and 7 | App settings |
 | `ConnectionStrings:tables` | Table endpoint (managed identity) or an Azurite connection string | Bicep / Aspire |
 | `KeyVault:Uri` | When set, secrets are read from this vault and re-read every 30 minutes | Bicep |
@@ -276,7 +279,18 @@ Not implemented, but the seams exist: `IMeasurementSource`, `INotificationChanne
 
 ## Electricity prices and read-only MCP
 
-Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and seven `/mcp` tools (including `get_price_estimate`, the "ca. pris" estimate) share `EnergyQueryService` and the decimal calculator in Core. With the heat pump module on, `/mcp` has an eighth tool, `get_heatpump_status`.
+Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and eight `/mcp` tools (including `get_price_estimate`, the "ca. pris" estimate, and `get_spot_prices`) share `EnergyQueryService` and the decimal calculator in Core. With the heat pump module on, `/mcp` has a ninth tool, `get_heatpump_status`.
+
+### Hourly prices (today and tomorrow)
+
+With `Pricing:Enabled`, and for each property that has an electricity agreement (which gives the price area; it is never guessed). The [specification](docs/spotpriser-spec.md) has the details.
+
+- **Oversigt** gets a card per group of properties that pay the same price: the price now, a bar per hour for today or tomorrow, the cheapest and the most expensive three hours in a row, and each hour's price split into spot price, supplier, network tariff, taxes and VAT.
+- **The price is approximate and all-in**: the day-ahead price (or the fixed price), the supplier's registered markup, the tariffs and taxes Eloverblik reports today, and VAT. Subscriptions are left out. Without tariffs from Eloverblik the card says that they are not included. It has not been checked against an invoice.
+- **The daily report** gets a line such as `Elpris i dag (Sommerhus, DK1): gns. 2,31 kr./kWh. Resten af dagen: billigst kl. 13–16 (1,62), dyrest kl. 17–20 (3,71).`
+- **Tomorrow's prices** are fetched at 13:30 (they are published around 13:00) and again by the 17:00 sync. A Telegram message is sent only on the days they stand out: an hour with a negative spot price, an average at least 25 % from the latest seven days', or an hour at 4.00 DKK/kWh or more. At most one message per day; turn it off under Indstillinger → Notifikationer.
+- `GET /api/energy/{id}/prices?from=…&to=…` (at most 7 days, at most two days ahead) and the MCP tool `get_spot_prices` return the same data.
+- Not verified against the live Energi Data Service or a real Telegram chat; the thresholds are starting values.
 
 Enable `Pricing:Enabled` in dev to register dated agreements in Settings. `Mcp:Enabled` additionally requires `Mcp:Authority`, `Mcp:Audience`, `Mcp:Resource` (the public HTTPS `/mcp` URL) and a delegated `Mcp:ReadScope` (default `energy.read`). Browser sign-in cookies do not authorize MCP. The OAuth provider must issue signed access tokens for that audience, and the authenticated subject must also match the existing `Auth:Users` allowlist. Google browser ID tokens are not API access tokens for this resource.
 
