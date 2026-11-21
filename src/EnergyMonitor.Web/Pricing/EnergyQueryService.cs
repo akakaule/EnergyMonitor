@@ -7,9 +7,69 @@ using EnergyMonitor.Web.Eloverblik;
 
 namespace EnergyMonitor.Web.Pricing;
 
-public sealed class EnergyQueryService(IPropertyStore properties, IConsumptionStore consumption, PricingStore pricing)
+/// <summary>
+/// Hourly prices per kWh for a property. <see cref="Area"/> is null and <see cref="Days"/> empty when the
+/// property has no electricity agreement: the price area is never guessed.
+/// </summary>
+public sealed record PriceView(string PropertyId, string? Area, string? Kind, string Currency, string Unit, string TimeZone,
+    int WindowHours, IReadOnlyList<string> Assumptions, DateTimeOffset? LastPriceSyncUtc, IReadOnlyList<DayPrices> Days);
+
+/// <summary>What the hourly price of a property is calculated from.</summary>
+public sealed record PriceInputs(ElectricityAgreement? Terms, IReadOnlyList<TariffRate> Rates, IReadOnlyList<string> Assumptions);
+
+public sealed class EnergyQueryService(IPropertyStore properties, IConsumptionStore consumption, PricingStore pricing,
+    TimeProvider time, Microsoft.Extensions.Options.IOptions<PricingOptions> options)
 {
     public const int MaxDays = 90;
+    public const int MaxPriceDays = 7;
+    public const string NoAgreement = "no_agreement";
+
+    /// <summary>Day-ahead prices exist at most this many days ahead.</summary>
+    public const int PriceDaysAhead = 2;
+
+    public int WindowHours => Math.Clamp(options.Value.WindowHours, HourlyPrices.MinWindowHours, HourlyPrices.MaxWindowHours);
+
+    /// <summary>
+    /// "Ca. pris" per kWh, hour by hour, incl. the supplier's markup, today's Eloverblik tariffs and VAT.
+    /// Dates are inclusive Danish days, at most 7, and at most two days ahead.
+    /// </summary>
+    public async Task<PriceView> PricesAsync(string id, string from, string to, CancellationToken ct)
+    {
+        var (f, t) = ValidateRange(from, to);
+        var property = await PropertyAsync(id, ct);
+        var today = LocalDay.Of(time.GetUtcNow(), LocalDay.Zone(property.TimeZone));
+        if (t.DayNumber - f.DayNumber >= MaxPriceDays || t > today.AddDays(PriceDaysAhead)) throw new ArgumentException("invalid_range");
+        var (inputs, days) = await DayPricesAsync(property, f, t, ct);
+        var area = inputs.Terms?.Area;
+        var synced = area is null ? null
+            : (await pricing.GetSourcesAsync(id, ct)).FirstOrDefault(s => s.Source == "Energinet." + area)?.LastSuccessUtc;
+        return new(id, area, inputs.Terms?.Kind, "DKK", "kWh", property.TimeZone, WindowHours, inputs.Assumptions, synced, days);
+    }
+
+    /// <summary>
+    /// The hourly prices of each day in the range. Today's cheapest and most expensive periods are looked for
+    /// among the hours that are not over yet. Without an agreement there are no days.
+    /// </summary>
+    public async Task<(PriceInputs Inputs, IReadOnlyList<DayPrices> Days)> DayPricesAsync(Property property, DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        var zone = LocalDay.Zone(property.TimeZone);
+        var start = LocalDay.StartUtc(from, zone);
+        var end = LocalDay.StartUtc(to.AddDays(1), zone);
+        var agreements = (await pricing.GetConfigurationAsync(property.Id, ct)).Agreements.OrderBy(a => a.FromUtc).ToArray();
+        // The agreement in force in the range; otherwise the latest one stands in, as it does for "ca. pris".
+        var terms = agreements.LastOrDefault(a => a.FromUtc < end && (a.ToUtc is null || a.ToUtc > start)) ?? agreements.LastOrDefault();
+        if (terms is null) return (new(null, [], [NoAgreement]), []);
+        var evidence = (await pricing.GetChargeEvidenceAsync(property.Id, ct)) is [var latest, ..] ? latest : (System.Text.Json.JsonElement?)null;
+        var rates = evidence is { } json ? ApproximatePricing.FromCurrentCharges(json, start, end) : [];
+        var assumptions = new List<string> { rates.Count > 0 ? ApproximatePricing.CurrentTariffs : ApproximatePricing.ChargesMissing };
+        if (terms.SupplierMarkup is null && terms.Kind != "Fixed") assumptions.Add(ApproximatePricing.SupplierMarkupMissing);
+        var prices = await pricing.GetPricesAsync(terms.Area, start, end, ct);
+        var now = time.GetUtcNow();
+        var today = LocalDay.Of(now, zone);
+        return (new(terms, rates, assumptions),
+            [.. LocalDay.Range(from, to).Select(day => HourlyPrices.ForDay(day, zone, prices, terms, rates, WindowHours, day == today ? now : null))]);
+    }
+
     public static (DateOnly From, DateOnly To) ValidateRange(string from, string to)
     {
         if (!DateOnly.TryParseExact(from, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var f)

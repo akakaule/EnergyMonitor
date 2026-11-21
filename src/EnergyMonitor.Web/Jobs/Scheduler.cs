@@ -116,6 +116,7 @@ public sealed class ReportService(
     NotificationSettingsService settings,
     HeatPumpStateService heatPumps,
     IOptionsMonitor<SensiboOptions> sensibo,
+    EnergyMonitor.Web.Pricing.PriceOutlookService prices,
     TimeProvider time,
     IOptions<ScheduleOptions> schedule)
 {
@@ -129,7 +130,8 @@ public sealed class ReportService(
             await summaries.GetAllAsync(ct),
             await alerts.GetEventsAsync(AlertEvent.SystemPropertyId, ct),
             lastSync?.FinishedAtUtc is { } finished ? TimeZoneInfo.ConvertTime(finished, zone) : null,
-            sensibo.CurrentValue.Enabled ? await heatPumps.LinkedReadingsAsync(ct) : null);
+            sensibo.CurrentValue.Enabled ? await heatPumps.LinkedReadingsAsync(ct) : null,
+            await prices.TodayLinesAsync(ct));
     }
 
     /// <summary>Queues today's report. The message id is the date, so a day gets one report however often this runs.</summary>
@@ -150,6 +152,7 @@ public sealed class ReportService(
 public sealed partial class MonitorPipeline(
     SyncService sync,
     EnergyMonitor.Web.Pricing.PriceSyncService prices,
+    EnergyMonitor.Web.Pricing.PriceOutlookService outlook,
     AlertService alerts,
     OutboxDispatcher dispatcher,
     ILogger<MonitorPipeline> logger)
@@ -165,8 +168,18 @@ public sealed partial class MonitorPipeline(
         // Rules run after a failed sync too: missing data and source failures are found there.
         await alerts.EvaluateAsync(ct);
         await dispatcher.DispatchAsync(ct);
-        await prices.RunAsync(ct);
+        await RunPricesAsync(spotOnly: false, ct);
         return run;
+    }
+
+    /// <summary>Fetches prices, then sends the message about tomorrow if its prices are in and stand out.</summary>
+    public async Task RunPricesAsync(bool spotOnly, CancellationToken ct)
+    {
+        await prices.RunAsync(ct, spotOnly);
+        if (await outlook.EnqueueTomorrowAsync(ct))
+        {
+            await dispatcher.DispatchAsync(ct);
+        }
     }
 
     /// <summary>Starts a run that outlives the request that asked for it.</summary>
@@ -191,7 +204,8 @@ public sealed partial class MonitorPipeline(
 /// <summary>
 /// The one background loop. Each minute it runs the slots that are due in local time. A slot is claimed
 /// in storage before it runs, so a restart neither repeats a slot nor loses one that fell due while the
-/// app was down. The heat pump is collected every 15 minutes on the same loop.
+/// app was down. The heat pump is collected every 15 minutes on the same loop. With pricing on, the
+/// day-ahead prices get a slot of their own in the afternoon, when tomorrow's have been published.
 /// </summary>
 public sealed partial class SchedulerService(
     MonitorPipeline pipeline,
@@ -201,6 +215,7 @@ public sealed partial class SchedulerService(
     IStateStore state,
     TimeProvider time,
     IOptions<ScheduleOptions> options,
+    IOptions<EnergyMonitor.Web.Pricing.PricingOptions> pricing,
     ILogger<SchedulerService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -235,6 +250,7 @@ public sealed partial class SchedulerService(
 
         var slots = o.SyncTimes.Select(t => (Name: "sync", Time: ParseTime(t)))
             .Append((Name: "report", Time: ParseTime(o.ReportTime)))
+            .Concat(pricing.Value.Enabled && !string.IsNullOrWhiteSpace(o.PriceSyncTime) ? [(Name: "prices", Time: ParseTime(o.PriceSyncTime))] : [])
             .OrderBy(s => s.Time);
 
         foreach (var (name, slotTime) in slots)
@@ -254,6 +270,10 @@ public sealed partial class SchedulerService(
             if (name == "sync")
             {
                 await pipeline.RunSyncAsync(ct);
+            }
+            else if (name == "prices")
+            {
+                await pipeline.RunPricesAsync(spotOnly: true, ct);
             }
             else
             {

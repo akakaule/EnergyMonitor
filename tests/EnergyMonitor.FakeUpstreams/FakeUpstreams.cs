@@ -61,6 +61,20 @@ public sealed class FakeState
 
     public FakeSensibo Sensibo { get; } = new();
 
+    /// <summary>Local hour from which tomorrow's day-ahead prices are published. Later days never are.</summary>
+    public int SpotPublishHour { get; set; } = 13;
+
+    /// <summary>Tomorrow's day-ahead prices stay unpublished.</summary>
+    public bool SpotTomorrowWithheld { get; set; }
+
+    /// <summary>Scales a day's day-ahead prices; 1 when the day is not listed.</summary>
+    public Dictionary<DateOnly, double> SpotDayFactors { get; } = [];
+
+    /// <summary>Days whose prices are negative from 02:00 to 04:00.</summary>
+    public HashSet<DateOnly> SpotNegativeDays { get; } = [];
+
+    public int SpotCalls { get; set; }
+
     public DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(Now(), Zone).DateTime);
 
     public DateOnly LatestAvailable => Today.AddDays(-DelayDays);
@@ -85,6 +99,9 @@ public sealed class FakeState
             PartialDays.Clear();
             MissingFrom.Clear();
             DailyOnly.Clear();
+            SpotTomorrowWithheld = false;
+            SpotDayFactors.Clear();
+            SpotNegativeDays.Clear();
             Sensibo.Reset();
         }
     }
@@ -154,6 +171,21 @@ public sealed class FakeState
                     return false;
             }
         }
+    }
+
+    /// <summary>
+    /// Day-ahead price in DKK per MWh: the same curve every day, cheapest at 07 and dearest at 19, so two
+    /// days differ only by their factor.
+    /// </summary>
+    public double SpotPrice(DateOnly date, DateTimeOffset startUtc)
+    {
+        var localHour = TimeZoneInfo.ConvertTime(startUtc, Zone).Hour;
+        if (SpotNegativeDays.Contains(date) && localHour is 2 or 3)
+        {
+            return -50;
+        }
+
+        return Math.Round((600 + (250 * Math.Sin((localHour - 13) / 24.0 * 2 * Math.PI))) * SpotDayFactors.GetValueOrDefault(date, 1), 2);
     }
 
     /// <summary>Deterministic hourly value: a daily shape with a little stable variation.</summary>
@@ -254,6 +286,36 @@ public static class FakeUpstreamsApp
                 return Results.Json(new { ok = true });
             });
         });
+
+        // Energi Data Service: quarter-hour day-ahead prices. start and end are Danish dates, end exclusive.
+        app.MapGet("/dataset/DayAheadPrices", (string start, string end, string? filter, FakeState state) => state.Locked(() =>
+        {
+            state.SpotCalls++;
+            if (!DateOnly.TryParseExact(start, "yyyy-MM-dd", out var from) || !DateOnly.TryParseExact(end, "yyyy-MM-dd", out var to))
+            {
+                return Results.BadRequest();
+            }
+
+            var areas = filter is null ? ["DK1", "DK2"]
+                : JsonNode.Parse(filter)?["PriceArea"]?.AsArray().Select(n => n!.GetValue<string>()).ToArray() ?? [];
+            var local = TimeZoneInfo.ConvertTime(state.Now(), state.Zone);
+            var published = state.Today.AddDays(local.Hour >= state.SpotPublishHour && !state.SpotTomorrowWithheld ? 1 : 0);
+            var records = new List<object>();
+            for (var date = from; date < to && date <= published; date = date.AddDays(1))
+            {
+                var dayStart = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(date.ToDateTime(TimeOnly.MinValue), state.Zone), TimeSpan.Zero);
+                var dayEnd = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(date.AddDays(1).ToDateTime(TimeOnly.MinValue), state.Zone), TimeSpan.Zero);
+                for (var t = dayStart; t < dayEnd; t = t.AddMinutes(15))
+                {
+                    foreach (var area in areas)
+                    {
+                        records.Add(new { TimeUTC = t.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture), PriceArea = area, DayAheadPriceDKK = state.SpotPrice(date, t) });
+                    }
+                }
+            }
+
+            return Results.Json(new { total = records.Count, records }, new System.Text.Json.JsonSerializerOptions());
+        }));
 
         app.MapFakeSensibo();
 

@@ -287,4 +287,10 @@ public sealed record OutboxMessage(
 public sealed record NotificationSettings(bool DailyReportEnabled, IReadOnlyList<string> Recipients)
 {
     public static readonly NotificationSettings Default = new(true, []);
+
+    /// <summary>
+    /// Send tomorrow's electricity prices when they stand out. A property with an initializer, so settings
+    /// stored before it existed read as on.
+    /// </summary>
+    public bool TomorrowPricesEnabled { get; init; } = true;
 }

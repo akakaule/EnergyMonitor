@@ -62,7 +62,8 @@ public sealed record RuleUpdate(bool Enabled, RuleParams Params);
 
 public sealed record PropertyUpdate(string Name, string? MeteringPointId, bool MonitoringEnabled);
 
-public sealed record NotificationSettingsDto(bool DailyReportEnabled, IReadOnlyList<string> Recipients);
+/// <summary><see cref="TomorrowPricesEnabled"/> is optional: a client that does not send it leaves it on.</summary>
+public sealed record NotificationSettingsDto(bool DailyReportEnabled, IReadOnlyList<string> Recipients, bool? TomorrowPricesEnabled = null);
 
 public static partial class Endpoints
 {
@@ -280,7 +281,7 @@ public static partial class Endpoints
         admin.MapGet("/settings/notifications", async (NotificationSettingsService settings, CancellationToken ct) =>
         {
             var s = await settings.GetAsync(ct);
-            return Results.Ok(new NotificationSettingsDto(s.DailyReportEnabled, s.Recipients));
+            return Results.Ok(new NotificationSettingsDto(s.DailyReportEnabled, s.Recipients, s.TomorrowPricesEnabled));
         });
 
         admin.MapPut("/settings/notifications", async (NotificationSettingsDto dto, NotificationSettingsService settings, CancellationToken ct) =>
@@ -291,7 +292,7 @@ public static partial class Endpoints
                 return Results.BadRequest(new { error = "invalid_recipients" });
             }
 
-            await settings.SetAsync(new NotificationSettings(dto.DailyReportEnabled, recipients), ct);
+            await settings.SetAsync(new NotificationSettings(dto.DailyReportEnabled, recipients) { TomorrowPricesEnabled = dto.TomorrowPricesEnabled ?? true }, ct);
             return Results.NoContent();
         });
 

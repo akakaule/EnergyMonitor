@@ -20,14 +20,16 @@ public static class ReportComposer
     /// <summary>
     /// The daily status text. It reports the latest <em>complete</em> day for each property and names the
     /// days that are not complete yet, so yesterday is never presented as final when it is not.
-    /// A property with a linked heat pump gets one more line with its latest reading.
+    /// A property with a linked heat pump gets one more line with its latest reading, and today's
+    /// electricity prices get a line per price group.
     /// </summary>
     public static string DailyReport(
         DateOnly today,
         IReadOnlyList<PropertySummary> summaries,
         IReadOnlyList<AlertEvent> systemEvents,
         DateTimeOffset? lastSuccessfulSyncLocal,
-        IReadOnlyDictionary<string, HeatPumpReading>? heatPumps = null)
+        IReadOnlyDictionary<string, HeatPumpReading>? heatPumps = null,
+        IReadOnlyList<string>? priceLines = null)
     {
         var sb = new StringBuilder();
         sb.Append("Energy Monitor · ").AppendLine(Da.LongDate(today));
@@ -70,6 +72,11 @@ public static class ReportComposer
             {
                 sb.Append(s.Property.Name).Append(" · varmepumpe: ").AppendLine(HeatPumpLine(reading, LocalDay.Zone(s.Property.TimeZone)));
             }
+        }
+
+        foreach (var line in priceLines ?? [])
+        {
+            sb.AppendLine(line);
         }
 
         // Properties waiting for the same days share one line.

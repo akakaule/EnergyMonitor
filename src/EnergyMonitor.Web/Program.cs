@@ -106,6 +106,7 @@ builder.Services.Configure<PricingOptions>(builder.Configuration.GetSection("Pri
 builder.Services.AddSingleton<PricingStore>();
 builder.Services.AddSingleton<EnergyQueryService>();
 builder.Services.AddSingleton<PriceSyncService>();
+builder.Services.AddSingleton<PriceOutlookService>();
 builder.Services.AddSingleton<SpotPriceClient>();
 builder.Services.AddHttpClient("spotprices", client =>
 {
