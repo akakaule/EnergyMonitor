@@ -33,7 +33,7 @@ beforeEach(() => {
   vi.spyOn(api, 'properties').mockResolvedValue([property('sommerhus', 'Sommerhus'), property('hus', 'Hus')]);
   vi.spyOn(api, 'health').mockResolvedValue(health);
   vi.spyOn(api, 'rules').mockResolvedValue(rules);
-  vi.spyOn(api, 'notificationSettings').mockResolvedValue({ dailyReportEnabled: true, recipients: [] });
+  vi.spyOn(api, 'notificationSettings').mockResolvedValue({ dailyReportEnabled: true, recipients: [], tomorrowPricesEnabled: true });
   vi.spyOn(api, 'pricing').mockResolvedValue({
     agreements: [{ fromUtc: '2026-11-12T23:00:00+00:00', toUtc: null, area: 'DK1', kind: 'Spot', fixedPrice: null, supplierMarkup: null, dailySubscription: null, settlementMinutes: 60, vatRate: 0.25 }],
     rates: [], requiredTariffCodes: [], tariffsConfirmed: false,
@@ -109,6 +109,18 @@ describe('Settings', () => {
     expect(panel.getByRole('button', { name: 'Hent målepunkter' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Slet forbrugsdata…' })).toBeTruthy();
     expect(api.pricing).toHaveBeenCalledWith('hus');
+  });
+
+  it('lets an administrator turn the message about tomorrow’s electricity prices off', async () => {
+    const save = vi.spyOn(api, 'saveNotificationSettings').mockResolvedValue(undefined);
+    render(<Settings me={admin} section="notifikationer" />);
+
+    const toggle = await screen.findByRole('switch', { name: /Send elpriser for i morgen/ });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Gem' }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ dailyReportEnabled: true, tomorrowPricesEnabled: false, recipients: [] }));
   });
 
   it('falls back to Drift for a section that does not exist', async () => {

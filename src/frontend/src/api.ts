@@ -115,6 +115,8 @@ export interface MeteringPoint {
 export interface NotificationSettings {
   dailyReportEnabled: boolean;
   recipients: string[];
+  /** Send tomorrow's electricity prices on the days they stand out. */
+  tomorrowPricesEnabled: boolean;
 }
 
 export interface Me {
@@ -131,6 +133,50 @@ export interface Estimate {
   consumptionCoverage: number;
   components: Record<string, number>;
   assumptions: string[];
+}
+
+/** The price of one kWh in one hour, DKK. The parts are excl. VAT; `total` is incl. VAT and null without a price. */
+export interface HourPrice {
+  startUtc: string;
+  endUtc: string;
+  spot: number | null;
+  energy: number | null;
+  supplier: number;
+  network: number;
+  tax: number;
+  vat: number | null;
+  total: number | null;
+}
+
+export interface PriceWindow {
+  fromUtc: string;
+  toUtc: string;
+  average: number;
+}
+
+export interface DayPrices {
+  date: string;
+  /** Pending: no prices yet, typically tomorrow before 13:00. */
+  status: 'Complete' | 'Partial' | 'Pending';
+  average: number | null;
+  min: number | null;
+  max: number | null;
+  /** For today: among the hours that are not over yet. */
+  cheapest: PriceWindow | null;
+  mostExpensive: PriceWindow | null;
+  negativeHours: number;
+  hours: HourPrice[];
+}
+
+/** Hourly prices for a property. `area` is null and `days` empty when it has no electricity agreement. */
+export interface PriceView {
+  propertyId: string;
+  area: string | null;
+  kind: string | null;
+  windowHours: number;
+  assumptions: string[];
+  lastPriceSyncUtc: string | null;
+  days: DayPrices[];
 }
 
 export interface Features {
@@ -252,6 +298,7 @@ export const api = {
   priceStatus: (id: string, from: string, to: string) => request<{ sources: { source: string; lastSuccessUtc: string | null; errorCode: string | null }[] }>('GET', `/api/energy/${id}/status?from=${from}&to=${to}`),
   costs: (id: string, from: string, to: string) => request<CostResult>('GET', `/api/energy/${id}/costs?from=${from}&to=${to}`),
   estimate: (id: string, from: string, to: string) => request<Estimate>('GET', `/api/energy/${id}/estimate?from=${from}&to=${to}`),
+  prices: (id: string, from: string, to: string) => request<PriceView>('GET', `/api/energy/${id}/prices?from=${from}&to=${to}`),
   pricing: (id: string) => request<PricingConfiguration>('GET', `/api/energy/${id}/configuration`),
   savePricing: (id: string, config: PricingConfiguration) => request<void>('PUT', `/api/energy/${id}/configuration`, config),
   me: () => request<Me>('GET', '/api/me'),

@@ -328,6 +328,45 @@ main > .small {
   font-variant-numeric: tabular-nums;
 }
 
+.hero-unit {
+  font-size: 1.1rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--ink-2);
+}
+
+.price-card h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.legend.price-periods {
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.price-breakdown {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--inset);
+}
+
+.price-breakdown-head {
+  margin: 0;
+}
+
+.price-breakdown .stats {
+  margin-top: 6px;
+  gap: 4px 18px;
+}
+
+.price-breakdown .stats dd {
+  font-size: 1rem;
+}
+
 .hero-cost {
   margin: 4px 0 0;
   font-size: 1.15rem;
@@ -1350,6 +1389,25 @@ input[type='checkbox'] {
   fill: var(--series-selected);
 }
 
+/* Price charts: the cheapest and the dearest period have their own colour, hours that are over are faded,
+   and the chosen hour is outlined so its colour stays readable. */
+.bar.bar-tone-low {
+  fill: var(--good);
+}
+
+.bar.bar-tone-high {
+  fill: var(--serious);
+}
+
+.bar.bar-tone-past {
+  opacity: 0.4;
+}
+
+.price-chart .bar-selected {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
 /* In a sparkline only the latest day is at full strength. */
 .chart-compact .bar:not(.bar-selected) {
   opacity: 0.55;
@@ -1419,6 +1477,14 @@ input[type='checkbox'] {
   height: 12px;
   border-radius: 3px;
   background: var(--series);
+}
+
+.swatch-low {
+  background: var(--good);
+}
+
+.swatch-high {
+  background: var(--serious);
 }
 
 .swatch-partial {

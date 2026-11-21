@@ -426,20 +426,21 @@ function NewProperty({ points, hidden, onCreated }: { points: Points; hidden: bo
   );
 }
 
-function Notifications({ hidden }: { hidden: boolean }) {
+function Notifications({ hidden, pricing }: { hidden: boolean; pricing: boolean }) {
   const settings = useLoad(() => api.notificationSettings(), 'notification-settings');
   return (
     <section className="panel" hidden={hidden}>
       <PanelHead title="Notifikationer" about="Beskeder sendes via Telegram." />
       {settings.error && <ErrorNote message={settings.error} onRetry={settings.reload} />}
       {/* The form starts from the stored settings, so it is only mounted once they are known. */}
-      {settings.data ? <NotificationForm initial={settings.data} /> : !settings.error && <p className="muted">Henter…</p>}
+      {settings.data ? <NotificationForm initial={settings.data} pricing={pricing} /> : !settings.error && <p className="muted">Henter…</p>}
     </section>
   );
 }
 
-function NotificationForm({ initial }: { initial: NotificationSettings }) {
+function NotificationForm({ initial, pricing }: { initial: NotificationSettings; pricing: boolean }) {
   const [daily, setDaily] = useState(initial.dailyReportEnabled);
+  const [tomorrow, setTomorrow] = useState(initial.tomorrowPricesEnabled ?? true);
   const [recipients, setRecipients] = useState(initial.recipients.join(', '));
   const [result, busy, run] = useAction();
   const [testResult, testing, runTest] = useAction();
@@ -459,12 +460,18 @@ function NotificationForm({ initial }: { initial: NotificationSettings }) {
         <div className="switch-row">
           <Switch checked={daily} onChange={setDaily}>Send daglig statusrapport kl. 09:00</Switch>
         </div>
+        {pricing && (
+          <div className="switch-row">
+            <Switch checked={tomorrow} onChange={setTomorrow}>Send elpriser for i morgen, når de skiller sig ud</Switch>
+            <span className="hint">Sendes om eftermiddagen ved negative priser, en meget dyr time eller et gennemsnit langt fra de seneste dage.</span>
+          </div>
+        )}
         <div className="actions">
           <button
             type="button"
             className="button"
             disabled={busy}
-            onClick={() => run(() => api.saveNotificationSettings({ dailyReportEnabled: daily, recipients: recipients.split(',').map((r) => r.trim()).filter(Boolean) }), 'Gemt.')}
+            onClick={() => run(() => api.saveNotificationSettings({ dailyReportEnabled: daily, tomorrowPricesEnabled: tomorrow, recipients: recipients.split(',').map((r) => r.trim()).filter(Boolean) }), 'Gemt.')}
           >
             Gem
           </button>
@@ -755,7 +762,7 @@ export function Settings({ me, section }: { me: Me; section?: string }) {
                   window.location.hash = sectionHref(propertySection(id));
                 }}
               />
-              <Notifications hidden={active !== NOTIFICATIONS} />
+              <Notifications hidden={active !== NOTIFICATIONS} pricing={features.data?.pricing ?? false} />
               {heatpumpOn && (
                 <HeatPumpSettings
                   status={heatpump}
