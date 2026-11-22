@@ -250,16 +250,22 @@ function RuleFields({ type, params, set }: { type: Rule['type']; params: Rule['p
         <>
           <NumberField
             label={type === 'LowConsumption' ? 'Alarm under' : 'Alarm over'}
-            unit="% af median"
+            unit={params.weatherAdjusted ?? true ? '% af forventet eller median' : '% af median'}
             min={0}
             max={1000}
             value={params.thresholdPercent}
             onChange={(e) => set({ thresholdPercent: numeric(e.target.value) })}
           />
-          <NumberField label="Mindste median" unit="kWh/døgn" min={0} max={1000} step="0.5" value={params.minBaselineKWh} onChange={(e) => set({ minBaselineKWh: numeric(e.target.value) })} />
+          <NumberField label={params.weatherAdjusted ?? true ? 'Mindste forventet eller median' : 'Mindste median'} unit="kWh/døgn" min={0} max={1000} step="0.5" value={params.minBaselineKWh} onChange={(e) => set({ minBaselineKWh: numeric(e.target.value) })} />
           {type === 'LowConsumption' && (
             <NumberField label="Alarm efter" unit="døgn i træk" min={1} max={30} value={params.escalateAfterDays} onChange={(e) => set({ escalateAfterDays: numeric(e.target.value) })} />
           )}
+          <div className="rule-wide">
+            <Switch checked={params.weatherAdjusted ?? true} onChange={(weatherAdjusted) => set({ weatherAdjusted })}>Tag højde for udetemperaturen</Switch>
+            <p className="hint">
+              Døgnet sammenlignes med det forbrug, udetemperaturen forklarer, i stedet for medianen. Det kræver en position på ejendommen og en tydelig sammenhæng mellem forbrug og kulde; ellers bruges medianen.
+            </p>
+          </div>
         </>
       );
   }

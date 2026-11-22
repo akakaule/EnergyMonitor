@@ -113,7 +113,7 @@ function AlertBasis({ alert: a }: { alert: Alert }) {
   if (a.observed === null || a.baseline === null) return null;
   return (
     <p className="alert-basis">
-      Målt {kWh(a.observed)} · median {kWh(a.baseline)}
+      Målt {kWh(a.observed)} · {a.outdoorC != null ? `forventet ${kWh(a.baseline)} ved ${celsius(a.outdoorC)} ude` : `median ${kWh(a.baseline)}`}
       {a.threshold !== null ? ` · grænse ${kWh(a.threshold)}` : ''}
     </p>
   );

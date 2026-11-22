@@ -67,6 +67,8 @@ export interface HeatingView {
   latest?: HeatingDay | null;
   lastWeatherSyncUtc?: string | null;
   weatherErrorCode?: string | null;
+  /** True when the line is good enough for the consumption alarms to judge days by. */
+  dependableForAlarms?: boolean;
   days: HeatingDay[];
 }
 
@@ -87,6 +89,8 @@ export interface Alert {
   createdAtUtc: string;
   acknowledgedAtUtc: string | null;
   closedAtUtc: string | null;
+  /** Set when the day was judged against its outdoor temperature: `baseline` is then the expected consumption. */
+  outdoorC?: number | null;
 }
 
 export interface RuleParams {
@@ -103,6 +107,8 @@ export interface RuleParams {
   sustainedMinutes?: number;
   /** HeatPumpOffline: how long the device may be silent. */
   offlineMinutes?: number;
+  /** Low and high consumption: compare with what the day's outdoor temperature leads one to expect, when that is known. */
+  weatherAdjusted?: boolean;
 }
 
 /** A property's rules. IndoorTooCold and HeatPumpOffline exist for a property with a linked heat pump. */

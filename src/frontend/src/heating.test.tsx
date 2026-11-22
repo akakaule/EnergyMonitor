@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, type HeatingDay, type HeatingView } from './api';
+import { api, ApiError, type Alert, type HeatingDay, type HeatingView } from './api';
+import { AlertList } from './common';
 import { HeatingCard } from './Heating';
 import { ScatterChart } from './ScatterChart';
 import { parsePosition } from './Settings';
@@ -91,6 +92,35 @@ describe('HeatingCard', () => {
     expect(screen.getByText(/Angiv ejendommens position/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Indstillinger' }).getAttribute('href')).toBe('#/indstillinger/ejendom/sommerhus');
     expect(heating).not.toHaveBeenCalled();
+  });
+});
+
+describe('weather-aware alarms', () => {
+  it('says on the card whether the alarms judge days by the outdoor temperature', async () => {
+    const heating = vi.spyOn(api, 'heating').mockResolvedValue(view({ dependableForAlarms: true }));
+    const first = render(<HeatingCard id="sommerhus" located />);
+    await waitFor(() => expect(screen.getByText(/alarmerne for lavt og højt forbrug sammenligner hvert døgn med det forventede forbrug/)).toBeTruthy());
+    first.unmount();
+
+    heating.mockResolvedValue(view({ dependableForAlarms: false }));
+    render(<HeatingCard id="sommerhus" located />);
+    await waitFor(() => expect(screen.getByText(/ikke tydelig nok til alarmerne/)).toBeTruthy());
+  });
+
+  const alert: Alert = {
+    id: 'sommerhus~LowConsumption~2026-11-06', propertyId: 'sommerhus', propertyName: 'Sommerhus', ruleType: 'LowConsumption',
+    severity: 'Observer', state: 'Open', label: 'Observer', firstDate: '2026-11-06', lastDate: '2026-11-06',
+    observed: 7, baseline: 16, threshold: 8, explanation: 'Døgnforbrug 7,0 kWh d. 6/11 er under 50 % af det forventede (16,0 kWh) ved −8,0 °C ude.',
+    createdAtUtc: '2026-11-08T07:00:00Z', acknowledgedAtUtc: null, closedAtUtc: null, outdoorC: -8,
+  };
+
+  it('names what an alarm was measured against: the expected consumption at the outdoor temperature, or the median', () => {
+    const first = render(<AlertList alerts={[alert]} onChanged={() => undefined} />);
+    expect(screen.getByText('Målt 7,0 kWh · forventet 16,0 kWh ved −8,0 °C ude · grænse 8,0 kWh')).toBeTruthy();
+    first.unmount();
+
+    render(<AlertList alerts={[{ ...alert, outdoorC: null, baseline: 15 }]} onChanged={() => undefined} />);
+    expect(screen.getByText('Målt 7,0 kWh · median 15,0 kWh · grænse 8,0 kWh')).toBeTruthy();
   });
 });
 

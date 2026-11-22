@@ -64,6 +64,11 @@ function Result({ view }: { view: HeatingView }) {
         <li><span className="swatch swatch-line" />Forventet forbrug</li>
       </ul>
       <p className="hint">
+        {view.dependableForAlarms
+          ? 'Sammenhængen er tydelig nok til, at alarmerne for lavt og højt forbrug sammenligner hvert døgn med det forventede forbrug i stedet for medianen. Det kan slås fra på hver regel under Indstillinger.'
+          : 'Sammenhængen er ikke tydelig nok til alarmerne, som derfor sammenligner med medianen af de foregående døgn.'}
+      </p>
+      <p className="hint">
         {view.usesIndoor
           ? 'Hvert døgn er sat efter forskellen mellem varmepumpens målte indetemperatur og udetemperaturen.'
           : `Hvert døgn er sat efter, hvor mange grader udetemperaturen lå under ${number(view.baseTemperatureC, 0)} °C.`}{' '}

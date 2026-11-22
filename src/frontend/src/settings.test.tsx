@@ -146,6 +146,24 @@ describe('Settings', () => {
     await waitFor(() => expect(save).toHaveBeenLastCalledWith('sommerhus', 'Sommerhus', null, true, null));
   });
 
+  it('lets a consumption rule stop taking the outdoor temperature into account', async () => {
+    const save = vi.spyOn(api, 'saveRule').mockResolvedValue(undefined);
+    render(<Settings me={admin} section="ejendom/sommerhus" />);
+
+    const rule = within(await screen.findByRole('group', { name: 'Højt forbrug' }));
+    const toggle = rule.getByRole('switch', { name: 'Tag højde for udetemperaturen' }) as HTMLInputElement;
+    expect(toggle.checked).toBe(true); // on for rules stored before the setting existed
+    expect(rule.getByText('% af forventet eller median')).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(rule.getByText('% af median')).toBeTruthy();
+    fireEvent.click(rule.getByRole('button', { name: 'Gem regel' }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith('sommerhus', expect.objectContaining({
+      id: 'HighConsumption', params: expect.objectContaining({ weatherAdjusted: false, thresholdPercent: 200 }),
+    })));
+    expect(within(screen.getByRole('group', { name: 'Manglende data' })).queryByRole('switch', { name: 'Tag højde for udetemperaturen' })).toBeNull();
+  });
+
   it('falls back to Drift for a section that does not exist', async () => {
     render(<Settings me={admin} section="ejendom/findes-ikke" />);
 
