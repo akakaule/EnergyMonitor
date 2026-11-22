@@ -1,6 +1,6 @@
 # Energy Monitor
 
-Private monitoring of electricity consumption for a home and a summer house. It imports consumption from Energinet's [Eloverblik Customer API](https://api.eloverblik.dk/CustomerApi/index.html), shows it in a mobile-friendly dashboard (installable as a PWA), sends a daily status report on Telegram, and raises alarms when a day's consumption is unusually low or high, when data stops arriving, or when the data source fails. With electricity prices enabled it shows what a kWh costs hour by hour today and tomorrow, and when it is cheapest (see [Hourly prices](#hourly-prices-today-and-tomorrow)). It also monitors and controls the summer house's heat pump through [Sensibo](https://sensibo.github.io/), records its temperature history, and raises a frost alarm when the house gets too cold (see [Heat pump](#heat-pump-sensibo)).
+Private monitoring of electricity consumption for a home and a summer house. It imports consumption from Energinet's [Eloverblik Customer API](https://api.eloverblik.dk/CustomerApi/index.html), shows it in a mobile-friendly dashboard (installable as a PWA), sends a daily status report on Telegram, and raises alarms when a day's consumption is unusually low or high, when data stops arriving, or when the data source fails. With electricity prices enabled it shows what a kWh costs hour by hour today and tomorrow, and when it is cheapest (see [Hourly prices](#hourly-prices-today-and-tomorrow)). With a position on a property it fetches the outdoor temperature and shows how much of the consumption the cold explains (see [Consumption and outdoor temperature](#consumption-and-outdoor-temperature)). It also monitors and controls the summer house's heat pump through [Sensibo](https://sensibo.github.io/), records its temperature history, and raises a frost alarm when the house gets too cold (see [Heat pump](#heat-pump-sensibo)).
 
 This is the v1 of `energy-monitor-mvp-spec.md`. The user interface and all messages are in Danish; times are `Europe/Copenhagen`.
 
@@ -8,6 +8,7 @@ This is the v1 of `energy-monitor-mvp-spec.md`. The user interface and all messa
 
 ```text
 Eloverblik Customer API        Telegram Bot API        Sensibo API
+(+ Energi Data Service for prices and Open-Meteo for outdoor temperature, both without a key)
           ▲                           ▲                      ▲
           │                           │                      │
    ┌──────┴───────────────────────────┴──────────────────────┴──┐
@@ -71,6 +72,8 @@ curl -X POST http://localhost:5099/control/scenario/low            # summer hous
 curl -X POST http://localhost:5099/control/scenario/missing        # summer house: no data for the last 5 days
 curl -X POST http://localhost:5099/control/scenario/outage         # Eloverblik answers 503
 curl -X POST http://localhost:5099/control/scenario/telegram-down  # Telegram fails; messages stay queued
+curl -X POST http://localhost:5099/control/scenario/heating        # summer house: consumption follows the fake outdoor temperature
+curl -X POST http://localhost:5099/control/scenario/weather-down   # the weather service answers 429
 curl -X POST http://localhost:5099/control/scenario/cold           # heat pump: 3,5 °C indoors (frost alarm)
 curl -X POST http://localhost:5099/control/scenario/offline        # heat pump: lost its connection 3 hours ago
 curl -X POST http://localhost:5099/control/scenario/sensibo-down   # Sensibo answers 503
@@ -93,8 +96,8 @@ For frontend work, `npm run dev` in `src/frontend` proxies `/api` to the running
 ```sh
 docker run -d --rm -p 10002:10002 mcr.microsoft.com/azure-storage/azurite \
   azurite-table --tableHost 0.0.0.0 --inMemoryPersistence --skipApiVersionCheck
-dotnet test --project tests/EnergyMonitor.Tests     # 335 tests; the 15 Table Storage ones are skipped without Azurite
-cd src/frontend && npm run lint && npm test         # ESLint and 103 component/format tests
+dotnet test --project tests/EnergyMonitor.Tests     # 350 tests; the 15 Table Storage ones are skipped without Azurite
+cd src/frontend && npm run lint && npm test         # ESLint and 112 component/format tests
 ```
 
 The pipeline tests run the real application in-process with a controllable clock, wired to the fake upstreams.
@@ -115,6 +118,7 @@ The pipeline tests run the real application in-process with a controllable clock
 | `Schedule:PriceSyncTime` | Danish local time of the extra fetch of day-ahead prices, default `13:30`; empty turns it off. Only with `Pricing:Enabled` | App settings |
 | `Pricing:WindowHours` | Length of the cheapest and the most expensive period of a day, default 3 (1–6) | App settings |
 | `Pricing:NotifyDeviationPercent`, `Pricing:NotifyHighPrice` | When tomorrow's prices are worth a Telegram message: an average this far from the latest days' (default 25 %), or an hour at this price or more (default 4.00 DKK/kWh incl. VAT). 0 turns either off | App settings |
+| `Weather:BaseUrl`, `Weather:PastDays`, `Weather:BaseTemperatureC` | The outdoor temperature source (default Open-Meteo), how far back each fetch reaches (default and maximum 92 days), and the indoor temperature assumed for a property without a recorded one (default 17) | App settings |
 | `Sync:BackfillDays`, `Sync:RefetchDays` | Default 90 and 7 | App settings |
 | `ConnectionStrings:tables` | Table endpoint (managed identity) or an Azurite connection string | Bicep / Aspire |
 | `KeyVault:Uri` | When set, secrets are read from this vault and re-read every 30 minutes | Bicep |
@@ -273,13 +277,26 @@ The summer house's heat pump is a module of its own, on with `Sensibo:Enabled` a
 - Requests are gzip-compressed, which Sensibo rewards with a higher rate limit, and there are no automatic retries.
 - **MCP** gets one read-only tool, `get_heatpump_status`. There are deliberately no tools that change the heat pump.
 
+## Consumption and outdoor temperature
+
+For a property with a position (latitude and longitude under Indstillinger → the property). The [specification](docs/udetemperatur-spec.md) has the details.
+
+- **Outdoor temperature** is fetched from [Open-Meteo](https://open-meteo.com/) after each sync: hourly values for the latest 92 days, kept as history from then on. No key. The machine must reach `api.open-meteo.com`, and the property's position is sent to it.
+- **The property's page** gets the card *Forbrug og udetemperatur*: what a degree colder costs in kWh a day, the base load, how much of the day-to-day variation the cold explains, and the latest day against what was expected. A scatter plot shows each day and the fitted line.
+- **Degree-days** are measured against the indoor temperature a linked heat pump has recorded (at least 14 days), otherwise against 17 °C. That matters for a summer house kept at 10 °C.
+- The consumption is the whole metering point's, not the heat pump's alone; everything else ends up in the base load.
+- A failing weather source is shown on the card as a code. It never fails the sync, raises no alarm and sends no message.
+- `GET /api/properties/{id}/heating?days=90` and the MCP tool `get_heating_analysis` return the same data.
+- The alarm rules do not use the outdoor temperature yet.
+- Not verified against the live Open-Meteo: from the development environment it only answered 429 (quota used up for the shared address).
+
 ## Later: Home Assistant
 
 Not implemented, but the seams exist: `IMeasurementSource`, `INotificationChannel` and the neutral `Measurement` record (`sourceId`, `propertyId`, `metric`, `value`, `unit`, `observedAtUtc`, `quality`). A future Home Assistant adapter in the summer house should push selected events and a heartbeat outbound to an authenticated endpoint here, so no inbound ports are opened there.
 
 ## Electricity prices and read-only MCP
 
-Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and eight `/mcp` tools (including `get_price_estimate`, the "ca. pris" estimate, and `get_spot_prices`) share `EnergyQueryService` and the decimal calculator in Core. With the heat pump module on, `/mcp` has a ninth tool, `get_heatpump_status`.
+Pricing and MCP are independently disabled by default. See [implementation and activation notes](docs/elpriser-implementation.md) for the calculation contract, historical tariff mappings, configuration and outstanding live acceptance checks. The dashboard, `/api/energy` endpoints and eight `/mcp` tools (including `get_price_estimate`, the "ca. pris" estimate, and `get_spot_prices`) share `EnergyQueryService` and the decimal calculator in Core. `/mcp` also has `get_heating_analysis` and, with the heat pump module on, `get_heatpump_status`: ten tools in all.
 
 ### Hourly prices (today and tomorrow)
 
