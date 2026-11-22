@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { PricingSettings } from './Pricing';
-import { api, codeText, errorText, type HeatPumpDevice, type HeatPumpStatus, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
+import { api, ApiError, codeText, errorText, type HeatPumpDevice, type HeatPumpStatus, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
 import { ErrorNote, StatusBadge, Switch, useLoad, type Loaded } from './common';
 import { dateTime, fullDate } from './format';
 
@@ -293,14 +293,40 @@ function RuleRow({ propertyId, rule, onSaved }: { propertyId: string; rule: Rule
   );
 }
 
+const coordinate = (value: number | null | undefined) => (value == null ? '' : String(value).replace('.', ','));
+
+/**
+ * The position typed into the two fields: null when both are empty. Decimals may be written with a comma.
+ * Anything else that is not two numbers in range is refused here, with the server's own error code.
+ */
+export function parsePosition(latitude: string, longitude: string): { latitude: number; longitude: number } | null {
+  if (latitude.trim() === '' && longitude.trim() === '') return null;
+  const read = (text: string) => (/^\s*-?\d+([.,]\d+)?\s*$/.test(text) ? Number(text.trim().replace(',', '.')) : NaN);
+  const [lat, lon] = [read(latitude), read(longitude)];
+  if (!(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) throw new ApiError(400, 'invalid_location');
+  return { latitude: lat, longitude: lon };
+}
+
 function PropertySettings({ property, points, pricing, rulesVersion, hidden, onSaved }: { property: PropertySummary; points: Points; pricing: boolean; rulesVersion: number; hidden: boolean; onSaved: () => void }) {
   // Linking a heat pump adds rules, so the list is fetched again when links change.
   const rules = useLoad(() => api.rules(property.id), `rules|${property.id}|${rulesVersion}`);
   const [name, setName] = useState(property.name);
   const [monitoring, setMonitoring] = useState(property.monitoringEnabled);
   const [point, setPoint] = useState('');
+  const [latitude, setLatitude] = useState(coordinate(property.latitude));
+  const [longitude, setLongitude] = useState(coordinate(property.longitude));
   const [result, busy, run] = useAction();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // A pair copied from a map ("55.9321, 11.6012") pasted into the first field fills both.
+  const typeLatitude = (text: string) => {
+    const pair = /^\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*$/.exec(text);
+    if (pair) {
+      setLatitude(pair[1].replace('.', ','));
+      setLongitude(pair[2].replace('.', ','));
+    } else {
+      setLatitude(text);
+    }
+  };
   const [deleteResult, deleting, runDelete] = useAction();
 
   return (
@@ -330,6 +356,20 @@ function PropertySettings({ property, points, pricing, rulesVersion, hidden, onS
             points={points}
           />
         </div>
+        <div className="fields">
+          <label className="field">
+            Breddegrad
+            <input type="text" inputMode="decimal" placeholder="55,93" value={latitude} onChange={(e) => typeLatitude(e.target.value)} />
+          </label>
+          <label className="field">
+            Længdegrad
+            <input type="text" inputMode="decimal" placeholder="11,60" value={longitude} onChange={(e) => setLongitude(e.target.value)} />
+          </label>
+        </div>
+        <p className="hint">
+          Positionen bruges kun til at hente udetemperaturen (Open-Meteo), så forbruget kan sammenlignes med kulden. To decimaler er nok.
+          Koordinater kopieret fra et kort kan sættes ind i det første felt. Temperaturen hentes ved næste synkronisering.
+        </p>
         {point !== '' && property.hasMeteringPoint && (
           <p className="note note-warn">Når målepunktet skiftes, slettes ejendommens hidtidige forbrugsdata og alarmer, og historikken hentes igen.</p>
         )}
@@ -343,7 +383,7 @@ function PropertySettings({ property, points, pricing, rulesVersion, hidden, onS
             className="button"
             disabled={busy}
             onClick={async () => {
-              if (await run(() => api.saveProperty(property.id, name, point || null, monitoring), 'Gemt.')) {
+              if (await run(() => api.saveProperty(property.id, name, point || null, monitoring, parsePosition(latitude, longitude)), 'Gemt.')) {
                 setPoint('');
                 onSaved();
               }

@@ -1408,6 +1408,41 @@ input[type='checkbox'] {
   stroke-width: 2;
 }
 
+/* Scatter plots: one dot per day, a fitted line, and the latest day in the warm colour. */
+.scatter-dot {
+  fill: var(--series);
+  fill-opacity: 0.55;
+  stroke: var(--surface);
+  stroke-width: 1;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.scatter-dot-highlight {
+  fill: var(--series-temperature);
+  fill-opacity: 1;
+}
+
+.scatter-dot-active {
+  fill-opacity: 1;
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.scatter-line {
+  stroke: var(--ink-2);
+  stroke-width: 2;
+}
+
+.axis-title {
+  fill: var(--ink-2);
+}
+
+.scatter .tooltip-value {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
 /* In a sparkline only the latest day is at full strength. */
 .chart-compact .bar:not(.bar-selected) {
   opacity: 0.55;
@@ -1477,6 +1512,25 @@ input[type='checkbox'] {
   height: 12px;
   border-radius: 3px;
   background: var(--series);
+}
+
+.swatch-dot {
+  border-radius: 50%;
+  width: 9px;
+  height: 9px;
+  opacity: 0.6;
+}
+
+.swatch-dot-highlight {
+  background: var(--series-temperature);
+  opacity: 1;
+}
+
+.swatch-line {
+  height: 2px;
+  width: 16px;
+  border-radius: 0;
+  background: var(--ink-2);
 }
 
 .swatch-low {

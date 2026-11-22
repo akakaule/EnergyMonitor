@@ -40,6 +40,34 @@ export interface PropertySummary {
   lastSuccessfulSyncUtc: string | null;
   openAlerts: number;
   sparkline: DayValue[];
+  /** The property's position in decimal degrees; both or neither. Used to fetch the outdoor temperature. */
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+/** One complete day in the heating analysis. `expectedKWh` is what the fitted line gives for the day's cold. */
+export interface HeatingDay {
+  date: string;
+  kWh: number;
+  outdoorC: number;
+  indoorC?: number | null;
+  degreeDays: number;
+  expectedKWh?: number | null;
+}
+
+/** Daily consumption against degree-days: kWh = baseKWhPerDay + kWhPerDegreeDay × degree-days. */
+export interface HeatingView {
+  propertyId: string;
+  status: 'Ok' | 'InsufficientData' | 'NoLocation';
+  periodDays: number;
+  baseTemperatureC: number;
+  /** True when the days are measured against the indoor temperature a linked heat pump recorded. */
+  usesIndoor: boolean;
+  model?: { baseKWhPerDay: number; kWhPerDegreeDay: number; rSquared: number; days: number } | null;
+  latest?: HeatingDay | null;
+  lastWeatherSyncUtc?: string | null;
+  weatherErrorCode?: string | null;
+  days: HeatingDay[];
 }
 
 export interface Alert {
@@ -323,8 +351,9 @@ export const api = {
   meteringPoints: () => request<MeteringPoint[]>('GET', '/api/admin/metering-points'),
   createProperty: (name: string, meteringPointId: string | null) =>
     request<{ id: string }>('POST', '/api/admin/properties', { name, meteringPointId, monitoringEnabled: true }),
-  saveProperty: (id: string, name: string, meteringPointId: string | null, monitoringEnabled: boolean) =>
-    request<void>('PUT', `/api/admin/properties/${id}`, { name, meteringPointId, monitoringEnabled }),
+  saveProperty: (id: string, name: string, meteringPointId: string | null, monitoringEnabled: boolean, position: { latitude: number; longitude: number } | null) =>
+    request<void>('PUT', `/api/admin/properties/${id}`, { name, meteringPointId, monitoringEnabled, latitude: position?.latitude ?? null, longitude: position?.longitude ?? null }),
+  heating: (id: string, days: number) => request<HeatingView>('GET', `/api/properties/${id}/heating?days=${days}`),
   deleteData: (id: string) => request<void>('DELETE', `/api/admin/properties/${id}/data`),
 };
 
@@ -335,6 +364,9 @@ const ERRORS: Record<string, string> = {
   sync_running: 'En synkronisering kører allerede.',
   invalid_params: 'En eller flere værdier er uden for det tilladte interval.',
   invalid_recipients: 'Modtagere skal være Telegram chat-id’er (tal) eller @kanalnavne.',
+  invalid_location: 'Positionen skal være en breddegrad (−90 til 90) og en længdegrad (−180 til 180), f.eks. 55,93 og 11,60.',
+  weather_rate_limited: 'Vejrtjenesten begrænser antallet af kald lige nu.',
+  weather_unreachable: 'Der er ingen forbindelse til vejrtjenesten.',
   invalid_name: 'Navnet skal udfyldes og må højst være 40 tegn.',
   invalid_metering_point: 'Målepunkts-id skal være 18 cifre.',
   name_taken: 'Der findes allerede en ejendom med det navn.',
