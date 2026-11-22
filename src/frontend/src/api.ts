@@ -40,6 +40,34 @@ export interface PropertySummary {
   lastSuccessfulSyncUtc: string | null;
   openAlerts: number;
   sparkline: DayValue[];
+  /** The property's position in decimal degrees; both or neither. Used to fetch the outdoor temperature. */
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+/** One complete day in the heating analysis. `expectedKWh` is what the fitted line gives for the day's cold. */
+export interface HeatingDay {
+  date: string;
+  kWh: number;
+  outdoorC: number;
+  indoorC?: number | null;
+  degreeDays: number;
+  expectedKWh?: number | null;
+}
+
+/** Daily consumption against degree-days: kWh = baseKWhPerDay + kWhPerDegreeDay × degree-days. */
+export interface HeatingView {
+  propertyId: string;
+  status: 'Ok' | 'InsufficientData' | 'NoLocation';
+  periodDays: number;
+  baseTemperatureC: number;
+  /** True when the days are measured against the indoor temperature a linked heat pump recorded. */
+  usesIndoor: boolean;
+  model?: { baseKWhPerDay: number; kWhPerDegreeDay: number; rSquared: number; days: number } | null;
+  latest?: HeatingDay | null;
+  lastWeatherSyncUtc?: string | null;
+  weatherErrorCode?: string | null;
+  days: HeatingDay[];
 }
 
 export interface Alert {
@@ -115,6 +143,8 @@ export interface MeteringPoint {
 export interface NotificationSettings {
   dailyReportEnabled: boolean;
   recipients: string[];
+  /** Send tomorrow's electricity prices on the days they stand out. */
+  tomorrowPricesEnabled: boolean;
 }
 
 export interface Me {
@@ -131,6 +161,50 @@ export interface Estimate {
   consumptionCoverage: number;
   components: Record<string, number>;
   assumptions: string[];
+}
+
+/** The price of one kWh in one hour, DKK. The parts are excl. VAT; `total` is incl. VAT and null without a price. */
+export interface HourPrice {
+  startUtc: string;
+  endUtc: string;
+  spot: number | null;
+  energy: number | null;
+  supplier: number;
+  network: number;
+  tax: number;
+  vat: number | null;
+  total: number | null;
+}
+
+export interface PriceWindow {
+  fromUtc: string;
+  toUtc: string;
+  average: number;
+}
+
+export interface DayPrices {
+  date: string;
+  /** Pending: no prices yet, typically tomorrow before 13:00. */
+  status: 'Complete' | 'Partial' | 'Pending';
+  average: number | null;
+  min: number | null;
+  max: number | null;
+  /** For today: among the hours that are not over yet. */
+  cheapest: PriceWindow | null;
+  mostExpensive: PriceWindow | null;
+  negativeHours: number;
+  hours: HourPrice[];
+}
+
+/** Hourly prices for a property. `area` is null and `days` empty when it has no electricity agreement. */
+export interface PriceView {
+  propertyId: string;
+  area: string | null;
+  kind: string | null;
+  windowHours: number;
+  assumptions: string[];
+  lastPriceSyncUtc: string | null;
+  days: DayPrices[];
 }
 
 export interface Features {
@@ -252,6 +326,7 @@ export const api = {
   priceStatus: (id: string, from: string, to: string) => request<{ sources: { source: string; lastSuccessUtc: string | null; errorCode: string | null }[] }>('GET', `/api/energy/${id}/status?from=${from}&to=${to}`),
   costs: (id: string, from: string, to: string) => request<CostResult>('GET', `/api/energy/${id}/costs?from=${from}&to=${to}`),
   estimate: (id: string, from: string, to: string) => request<Estimate>('GET', `/api/energy/${id}/estimate?from=${from}&to=${to}`),
+  prices: (id: string, from: string, to: string) => request<PriceView>('GET', `/api/energy/${id}/prices?from=${from}&to=${to}`),
   pricing: (id: string) => request<PricingConfiguration>('GET', `/api/energy/${id}/configuration`),
   savePricing: (id: string, config: PricingConfiguration) => request<void>('PUT', `/api/energy/${id}/configuration`, config),
   me: () => request<Me>('GET', '/api/me'),
@@ -276,8 +351,9 @@ export const api = {
   meteringPoints: () => request<MeteringPoint[]>('GET', '/api/admin/metering-points'),
   createProperty: (name: string, meteringPointId: string | null) =>
     request<{ id: string }>('POST', '/api/admin/properties', { name, meteringPointId, monitoringEnabled: true }),
-  saveProperty: (id: string, name: string, meteringPointId: string | null, monitoringEnabled: boolean) =>
-    request<void>('PUT', `/api/admin/properties/${id}`, { name, meteringPointId, monitoringEnabled }),
+  saveProperty: (id: string, name: string, meteringPointId: string | null, monitoringEnabled: boolean, position: { latitude: number; longitude: number } | null) =>
+    request<void>('PUT', `/api/admin/properties/${id}`, { name, meteringPointId, monitoringEnabled, latitude: position?.latitude ?? null, longitude: position?.longitude ?? null }),
+  heating: (id: string, days: number) => request<HeatingView>('GET', `/api/properties/${id}/heating?days=${days}`),
   deleteData: (id: string) => request<void>('DELETE', `/api/admin/properties/${id}/data`),
 };
 
@@ -288,6 +364,9 @@ const ERRORS: Record<string, string> = {
   sync_running: 'En synkronisering kører allerede.',
   invalid_params: 'En eller flere værdier er uden for det tilladte interval.',
   invalid_recipients: 'Modtagere skal være Telegram chat-id’er (tal) eller @kanalnavne.',
+  invalid_location: 'Positionen skal være en breddegrad (−90 til 90) og en længdegrad (−180 til 180), f.eks. 55,93 og 11,60.',
+  weather_rate_limited: 'Vejrtjenesten begrænser antallet af kald lige nu.',
+  weather_unreachable: 'Der er ingen forbindelse til vejrtjenesten.',
   invalid_name: 'Navnet skal udfyldes og må højst være 40 tegn.',
   invalid_metering_point: 'Målepunkts-id skal være 18 cifre.',
   name_taken: 'Der findes allerede en ejendom med det navn.',

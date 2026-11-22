@@ -87,7 +87,7 @@ public class LocalModeTests
         using var json = System.Text.Json.JsonDocument.Parse(text);
         var tools = json.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray().ToArray();
 
-        Assert.Equal(7, tools.Length);
+        Assert.Equal(9, tools.Length);
         // Claude Code rejects the whole list if any outputSchema is, or contains, a boolean schema such as
         // {"$defs":{"output":true}} (what an untyped result produces). Such tools must not declare one.
         static bool HasBooleanSchema(System.Text.Json.JsonElement e) => e.ValueKind switch

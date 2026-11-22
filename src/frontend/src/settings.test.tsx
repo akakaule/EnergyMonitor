@@ -33,7 +33,7 @@ beforeEach(() => {
   vi.spyOn(api, 'properties').mockResolvedValue([property('sommerhus', 'Sommerhus'), property('hus', 'Hus')]);
   vi.spyOn(api, 'health').mockResolvedValue(health);
   vi.spyOn(api, 'rules').mockResolvedValue(rules);
-  vi.spyOn(api, 'notificationSettings').mockResolvedValue({ dailyReportEnabled: true, recipients: [] });
+  vi.spyOn(api, 'notificationSettings').mockResolvedValue({ dailyReportEnabled: true, recipients: [], tomorrowPricesEnabled: true });
   vi.spyOn(api, 'pricing').mockResolvedValue({
     agreements: [{ fromUtc: '2026-11-12T23:00:00+00:00', toUtc: null, area: 'DK1', kind: 'Spot', fixedPrice: null, supplierMarkup: null, dailySubscription: null, settlementMinutes: 60, vatRate: 0.25 }],
     rates: [], requiredTariffCodes: [], tariffsConfirmed: false,
@@ -109,6 +109,41 @@ describe('Settings', () => {
     expect(panel.getByRole('button', { name: 'Hent målepunkter' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Slet forbrugsdata…' })).toBeTruthy();
     expect(api.pricing).toHaveBeenCalledWith('hus');
+  });
+
+  it('lets an administrator turn the message about tomorrow’s electricity prices off', async () => {
+    const save = vi.spyOn(api, 'saveNotificationSettings').mockResolvedValue(undefined);
+    render(<Settings me={admin} section="notifikationer" />);
+
+    const toggle = await screen.findByRole('switch', { name: /Send elpriser for i morgen/ });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Gem' }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ dailyReportEnabled: true, tomorrowPricesEnabled: false, recipients: [] }));
+  });
+
+  it('saves a position pasted from a map as latitude and longitude, and removes it when the fields are emptied', async () => {
+    const save = vi.spyOn(api, 'saveProperty').mockResolvedValue(undefined);
+    render(<Settings me={admin} section="ejendom/sommerhus" />);
+
+    // Every property has a panel; only the chosen one is shown.
+    const panel = within((await screen.findByRole('heading', { level: 2, name: 'Sommerhus' })).closest('section')!);
+    const latitude = panel.getByLabelText('Breddegrad');
+    fireEvent.change(latitude, { target: { value: '55.9321, 11.6012' } });
+    expect((latitude as HTMLInputElement).value).toBe('55,9321');
+    expect((panel.getByLabelText('Længdegrad') as HTMLInputElement).value).toBe('11,6012');
+    fireEvent.click(panel.getByRole('button', { name: 'Gem ejendom' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('sommerhus', 'Sommerhus', null, true, { latitude: 55.9321, longitude: 11.6012 }));
+
+    fireEvent.change(panel.getByLabelText('Længdegrad'), { target: { value: '' } });
+    fireEvent.click(panel.getByRole('button', { name: 'Gem ejendom' }));
+    await waitFor(() => expect(panel.getByText(/Positionen skal være en breddegrad/)).toBeTruthy());
+    expect(save).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(panel.getByLabelText('Breddegrad'), { target: { value: '' } });
+    fireEvent.click(panel.getByRole('button', { name: 'Gem ejendom' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith('sommerhus', 'Sommerhus', null, true, null));
   });
 
   it('falls back to Drift for a section that does not exist', async () => {

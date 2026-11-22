@@ -94,8 +94,11 @@ public static class EnergyMcpSetup
 // Tools with an untyped result return their JSON as text and declare no output schema: the SDK would
 // otherwise announce {"$defs":{"output":true}}, which Claude Code rejects for the whole tool list.
 [McpServerToolType]
-public sealed class EnergyTools(EnergyQueryService queries)
+public sealed class EnergyTools(EnergyQueryService queries, Weather.HeatingQueryService heating)
 {
+    [McpServerTool(Name = "get_heating_analysis", ReadOnly = true, UseStructuredContent = true), Description("How a property's daily electricity use follows the outdoor temperature over the latest days (30-365, default 90). A day's degree-days are how many degrees colder it was outside than inside: against the indoor temperature recorded by a linked heat pump (usesIndoor true), otherwise against baseTemperatureC. 'model' is the fitted line kWh = baseKWhPerDay + kWhPerDegreeDay x degreeDays with rSquared (0-1, how much of the variation the cold explains). Each day has kWh, outdoorC, indoorC, degreeDays and expectedKWh; 'latest' is the newest day. The consumption is the whole metering point's, not the heat pump's alone. Status: Ok, InsufficientData (too few complete days) or NoLocation (the property has no position, so no outdoor temperature).")]
+    public Task<Weather.HeatingView> Heating(string propertyId, int? days, CancellationToken ct) => Safe(() => heating.AnalyseAsync(propertyId, days ?? Weather.HeatingQueryService.DefaultDays, ct));
+
     [McpServerTool(Name = "get_energy_overview", ReadOnly = true), Description("Homes, consumption and costs. Dates YYYY-MM-DD inclusive, maximum 90 days.")]
     public Task<object> Overview(string from, string to, CancellationToken ct) => Safe(() => queries.OverviewAsync(from, to, ct));
 
@@ -107,6 +110,9 @@ public sealed class EnergyTools(EnergyQueryService queries)
 
     [McpServerTool(Name = "get_price_estimate", ReadOnly = true, UseStructuredContent = true), Description("Approximate DKK price incl. VAT (\"ca. pris\"), always with a total: hourly consumption x spot price, the supplier's registered markup and subscription, and the net tariffs, Energinet tariffs, electricity tax and subscriptions Eloverblik reports today, applied to the whole period. Components are excl. VAT plus a Vat component. 'assumptions' lists what is assumed (current_tariffs, supplier_markup_missing, supplier_subscription_missing, charges_missing). Maximum 90 inclusive Danish days.")]
     public Task<ApproximateEstimate> Estimate(string propertyId, string from, string to, CancellationToken ct) => Safe(() => queries.EstimateAsync(propertyId, from, to, ct));
+
+    [McpServerTool(Name = "get_spot_prices", ReadOnly = true, UseStructuredContent = true), Description("Electricity price per kWh hour by hour, also for today and tomorrow (tomorrow is published around 13:00 Danish time). Per hour: the day-ahead spot price and an approximate total in DKK incl. VAT (spot or fixed price, the supplier's registered markup, and the tariffs and taxes Eloverblik reports today), with the parts excl. VAT. Per day: status (Complete, Partial, Pending), average, min, max, the cheapest and the most expensive period of 'windowHours' consecutive hours (for today: among the hours not yet over) and the number of hours with a negative spot price. 'assumptions' lists what is assumed (current_tariffs, charges_missing, supplier_markup_missing); no_agreement means the property has no registered agreement and no prices. Dates YYYY-MM-DD inclusive, maximum 7 days, at most two days ahead.")]
+    public Task<PriceView> SpotPrices(string propertyId, string from, string to, CancellationToken ct) => Safe(() => queries.PricesAsync(propertyId, from, to, ct));
 
     [McpServerTool(Name = "compare_periods", ReadOnly = true), Description("Compare consumption and costs with independent coverage. Each period at most 90 inclusive Danish days.")]
     public Task<object> Compare(string propertyId, string from, string to, string previousFrom, string previousTo, CancellationToken ct) => Safe(() => queries.CompareAsync(propertyId, from, to, previousFrom, previousTo, ct));

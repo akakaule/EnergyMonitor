@@ -14,6 +14,18 @@ public sealed class PricingOptions
     public bool Enabled { get; set; }
     public string BaseUrl { get; set; } = "https://api.energidataservice.dk/";
     public int BackfillDays { get; set; } = 90;
+
+    /// <summary>Length in hours (1–6) of the cheapest and the most expensive period of a day.</summary>
+    public int WindowHours { get; set; } = 3;
+
+    /// <summary>
+    /// Tomorrow's prices are sent when their average is this many percent from the average of the latest
+    /// days. 0 turns the comparison off.
+    /// </summary>
+    public decimal NotifyDeviationPercent { get; set; } = 25;
+
+    /// <summary>Tomorrow's prices are sent when an hour costs this much or more, DKK per kWh incl. VAT. 0 turns it off.</summary>
+    public decimal NotifyHighPrice { get; set; } = 4.00m;
 }
 
 public sealed class SpotPriceClient(IHttpClientFactory factory, IDelayer delayer)
@@ -50,7 +62,8 @@ public sealed class PriceSyncService(IOptions<PricingOptions> options, IProperty
     PricingStore store, SpotPriceClient spot, EloverblikClient eloverblik, TimeProvider time)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    public async Task RunAsync(CancellationToken ct)
+    /// <param name="spotOnly">Only the day-ahead prices: no call to Eloverblik. Used by the afternoon slot.</param>
+    public async Task RunAsync(CancellationToken ct, bool spotOnly = false)
     {
         if (!options.Value.Enabled || !await _gate.WaitAsync(0, ct)) return;
         try
@@ -70,7 +83,7 @@ public sealed class PriceSyncService(IOptions<PricingOptions> options, IProperty
                         var contiguous = ordered.Length > 0 && !ordered.Zip(ordered.Skip(1)).Any(p => p.First.EndUtc != p.Second.StartUtc);
                         return (ordered.FirstOrDefault()?.StartUtc, ordered.LastOrDefault()?.EndUtc, contiguous ? null : "spot_incomplete");
                     }, ct);
-                if (!string.IsNullOrWhiteSpace(property.MeteringPointId))
+                if (!spotOnly && !string.IsNullOrWhiteSpace(property.MeteringPointId))
                     await FetchAsync(property.Id, "Eloverblik.charges", async () =>
                     {
                         var evidence = await eloverblik.GetChargeEvidenceAsync(property.MeteringPointId, from, today, ct);

@@ -1,3 +1,4 @@
+import { HeatingCard } from './Heating';
 import { useState } from 'react';
 import { PropertyCosts } from './Pricing';
 import { api, type DayValue, type HeatPumpDevice } from './api';
@@ -203,6 +204,8 @@ export function PropertyDetail({ id }: { id: string }) {
           {daily.data && !allComplete && <p className="muted small">I alt vises kun, når alle døgn i perioden er komplette.</p>}
         </section>
       )}
+
+      {property && <HeatingCard id={id} located={property.latitude != null && property.longitude != null} />}
 
       {hourDay && (
         <section className="card">

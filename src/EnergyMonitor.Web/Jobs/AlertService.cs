@@ -23,6 +23,12 @@ public sealed class ScheduleOptions
     /// <summary>Local time of the daily report; after the morning sync.</summary>
     public string ReportTime { get; set; } = "09:00";
 
+    /// <summary>
+    /// Local time of the extra fetch of day-ahead prices, after tomorrow's are published around 13:00.
+    /// Empty turns it off; it only runs with <c>Pricing:Enabled</c>.
+    /// </summary>
+    public string PriceSyncTime { get; set; } = "13:30";
+
     public int TickSeconds { get; set; } = 60;
 
     /// <summary>A slot missed while the app was down is still run if it is no older than this.</summary>
