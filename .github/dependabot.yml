@@ -5,3 +5,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # init and analyze must be on the same version: update them in one PR.
+      codeql:
+        patterns:
+          - github/codeql-action*
