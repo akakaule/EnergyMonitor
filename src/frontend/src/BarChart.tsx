@@ -11,6 +11,10 @@ export interface Bar {
   /** null means no usable measurement. It is drawn as a gap, never as a zero-height bar. */
   value: number | null;
   state: 'complete' | 'partial' | 'missing';
+  /** A bar that stands apart from the rest: part of the cheapest or dearest period, or already over. */
+  tone?: 'low' | 'high' | 'past';
+  /** Said after the value, e.g. "billigste periode", so the tone is never carried by colour alone. */
+  note?: string;
 }
 
 interface Props {
@@ -23,6 +27,8 @@ interface Props {
   onSelect?: (key: string) => void;
   /** Sparkline mode: no axes, labels or tooltip. */
   compact?: boolean;
+  /** How a value is written in the tooltip and for screen readers. kWh with two decimals unless given. */
+  format?: (value: number) => string;
 }
 
 /** A round axis maximum at or above the data, with 2–4 even steps. */
@@ -33,12 +39,26 @@ export function niceScale(max: number): { top: number; step: number } {
   return { top: Math.ceil(max / step) * step, step };
 }
 
-function describe(bar: Bar): string {
-  if (bar.value === null || bar.state === 'missing') return `${bar.title}: data mangler`;
-  return `${bar.title}: ${kWh(bar.value, 2)}${bar.state === 'partial' ? ' (ufuldstændigt døgn)' : ''}`;
+/**
+ * The axis for values that may go below zero: the same steps as `niceScale`, extended downwards. With no
+ * negative value it is exactly `niceScale`, starting at 0.
+ */
+export function niceRange(min: number, max: number): { bottom: number; top: number; step: number } {
+  if (!(min < 0)) return { bottom: 0, ...niceScale(max) };
+  const { step } = niceScale(Math.max(max, 0) - min);
+  // Whole numbers of steps, without the stray digits of binary fractions (3 × 0,2 is not 0,6).
+  const steps = (count: number) => Number((count * step).toFixed(10));
+  return { bottom: steps(Math.floor(min / step)), top: steps(Math.max(1, Math.ceil(Math.max(max, 0) / step))), step };
 }
 
-export function BarChart({ bars, ariaLabel, height = 200, reference, selectedKey, onSelect, compact }: Props) {
+const defaultFormat = (value: number) => kWh(value, 2);
+
+function describe(bar: Bar, format: (value: number) => string): string {
+  if (bar.value === null || bar.state === 'missing') return `${bar.title}: data mangler`;
+  return `${bar.title}: ${format(bar.value)}${bar.state === 'partial' ? ' (ufuldstændigt døgn)' : ''}${bar.note ? ` (${bar.note})` : ''}`;
+}
+
+export function BarChart({ bars, ariaLabel, height = 200, reference, selectedKey, onSelect, compact, format = defaultFormat }: Props) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
 
@@ -46,14 +66,18 @@ export function BarChart({ bars, ariaLabel, height = 200, reference, selectedKey
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
   const values = bars.map((b) => b.value ?? 0);
-  const { top, step } = niceScale(Math.max(...values, reference?.value ?? 0));
-  const y = (value: number) => pad.top + plotH - (value / top) * plotH;
+  const { bottom, top, step } = niceRange(Math.min(0, ...values), Math.max(...values, reference?.value ?? 0));
+  const y = (value: number) => pad.top + plotH - ((value - bottom) / (top - bottom)) * plotH;
+  // Bars grow from the zero line, which is above the bottom of the plot when a value is negative.
+  const base = y(0);
   const band = bars.length > 0 ? plotW / bars.length : plotW;
   // Bars are capped at 24px and always leave a 2px gap, so neighbours never touch.
   const barW = Math.max(1, Math.min(24, band - 2));
   const labelEvery = Math.max(1, Math.ceil(bars.length / Math.max(1, Math.floor(plotW / 34))));
   const ticks: number[] = [];
-  for (let t = 0; t <= top + step / 2; t += step) ticks.push(t);
+  for (let i = Math.round(bottom / step); i * step <= top + step / 2; i++) ticks.push(Number((i * step).toFixed(10)));
+  // Steps such as 0,25 need two decimals; one would show 0,3 and 0,8.
+  const tickDecimals = step >= 1 ? 0 : Math.abs(step * 10 - Math.round(step * 10)) < 1e-9 ? 1 : 2;
   const active = hover !== null ? bars[hover] : null;
 
   return (
@@ -62,9 +86,9 @@ export function BarChart({ bars, ariaLabel, height = 200, reference, selectedKey
         {!compact &&
           ticks.map((t) => (
             <g key={t}>
-              <line x1={pad.left} x2={width - pad.right} y1={y(t)} y2={y(t)} className={t === 0 ? 'axis' : 'grid'} />
+              <line x1={pad.left} x2={width - pad.right} y1={y(t)} y2={y(t)} className={Math.abs(t) < step / 1000 ? 'axis' : 'grid'} />
               <text x={pad.left - 6} y={y(t)} className="tick" textAnchor="end" dominantBaseline="middle">
-                {number(t, step < 1 ? 1 : 0)}
+                {number(t, tickDecimals)}
               </text>
             </g>
           ))}
@@ -72,9 +96,13 @@ export function BarChart({ bars, ariaLabel, height = 200, reference, selectedKey
         {bars.map((bar, i) => {
           const x = pad.left + i * band + (band - barW) / 2;
           const missing = bar.value === null || bar.state === 'missing';
-          const h = missing ? 0 : Math.max(bar.value! > 0 ? 1 : 0, pad.top + plotH - y(bar.value!));
+          const negative = !missing && bar.value! < 0;
+          // A value other than zero is always at least a pixel tall.
+          const h = missing ? 0 : Math.max(bar.value! !== 0 ? 1 : 0, Math.abs(base - y(bar.value!)));
           const r = Math.min(4, barW / 2, h);
-          const base = pad.top + plotH;
+          // The rounded end points away from the zero line: up for a positive value, down for a negative one.
+          const end = negative ? base + h : base - h;
+          const turn = negative ? end - r : end + r;
           return (
             <g key={bar.key}>
               {missing ? (
@@ -82,8 +110,8 @@ export function BarChart({ bars, ariaLabel, height = 200, reference, selectedKey
                 <rect x={x} y={base - 2} width={barW} height={2} className="bar-missing" />
               ) : (
                 <path
-                  d={`M${x},${base} V${base - h + r} Q${x},${base - h} ${x + r},${base - h} H${x + barW - r} Q${x + barW},${base - h} ${x + barW},${base - h + r} V${base} Z`}
-                  className={`bar bar-${bar.state}${selectedKey === bar.key ? ' bar-selected' : ''}${hover === i ? ' bar-hover' : ''}`}
+                  d={`M${x},${base} V${turn} Q${x},${end} ${x + r},${end} H${x + barW - r} Q${x + barW},${end} ${x + barW},${turn} V${base} Z`}
+                  className={`bar bar-${bar.state}${bar.tone ? ` bar-tone-${bar.tone}` : ''}${selectedKey === bar.key ? ' bar-selected' : ''}${hover === i ? ' bar-hover' : ''}`}
                 />
               )}
               {!compact && i % labelEvery === 0 && (
@@ -101,7 +129,7 @@ export function BarChart({ bars, ariaLabel, height = 200, reference, selectedKey
                   className="hit"
                   role={onSelect ? 'button' : undefined}
                   tabIndex={onSelect ? 0 : undefined}
-                  aria-label={describe(bar)}
+                  aria-label={describe(bar, format)}
                   aria-pressed={onSelect ? selectedKey === bar.key : undefined}
                   onMouseEnter={() => setHover(i)}
                   onFocus={() => setHover(i)}
@@ -138,13 +166,14 @@ export function BarChart({ bars, ariaLabel, height = 200, reference, selectedKey
           role="status"
           style={{
             left: Math.min(Math.max(pad.left + hover * band + band / 2, 70), width - 70),
-            top: Math.max(0, (active.value === null ? pad.top + plotH : y(active.value)) - 8),
+            top: Math.max(0, (active.value === null ? base : Math.min(base, y(active.value))) - 8),
           }}
         >
           <span className="tooltip-title">{active.title}</span>
           <span className="tooltip-value">
-            {active.value === null || active.state === 'missing' ? 'Data mangler' : kWh(active.value, 2)}
+            {active.value === null || active.state === 'missing' ? 'Data mangler' : format(active.value)}
           </span>
+          {active.note && <span className="tooltip-note">{active.note}</span>}
           {active.state === 'partial' && <span className="tooltip-note">Ufuldstændigt døgn</span>}
         </div>
       )}

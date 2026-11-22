@@ -61,7 +61,7 @@ public sealed class CapturingLoggerProvider : ILoggerProvider
 
 /// <summary>
 /// The real application in-process: in-memory (or supplied) table backend, a controllable clock, and the
-/// fake Eloverblik and Telegram services wired in as the HTTP handlers of the app's own clients.
+/// fake Eloverblik, Energi Data Service and Telegram services wired in as the HTTP handlers of the app's own clients.
 /// </summary>
 public sealed class AppFactory : WebApplicationFactory<Program>
 {
@@ -135,6 +135,8 @@ public sealed class AppFactory : WebApplicationFactory<Program>
         builder.UseSetting("Auth:Users:1:Role", UserRoles.Viewer);
         builder.UseSetting("Eloverblik:BaseUrl", "http://fake/customerapi/api/");
         builder.UseSetting("Eloverblik:RefreshToken", RefreshToken);
+        builder.UseSetting("Pricing:BaseUrl", "http://fake/");
+        builder.UseSetting("Weather:BaseUrl", "http://fake/");
         builder.UseSetting("Telegram:BaseUrl", "http://fake");
         builder.UseSetting("Telegram:BotToken", BotToken);
         builder.UseSetting("Telegram:ChatIds:0", ChatId);
@@ -153,6 +155,8 @@ public sealed class AppFactory : WebApplicationFactory<Program>
             services.AddSingleton<IDelayer>(Delayer);
             services.AddHttpClient(EloverblikClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
             services.AddHttpClient(TelegramChannel.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
+            services.AddHttpClient(EnergyMonitor.Web.Weather.OpenMeteoClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
+            services.AddHttpClient("spotprices").ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
             services.AddHttpClient(SensiboClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
         });
     }

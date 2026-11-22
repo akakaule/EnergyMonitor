@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { PricingSettings } from './Pricing';
-import { api, codeText, errorText, type HeatPumpDevice, type HeatPumpStatus, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
+import { api, ApiError, codeText, errorText, type HeatPumpDevice, type HeatPumpStatus, type Health, type Me, type MeteringPoint, type NotificationSettings, type PropertySummary, type Rule } from './api';
 import { ErrorNote, StatusBadge, Switch, useLoad, type Loaded } from './common';
 import { dateTime, fullDate } from './format';
 
@@ -293,14 +293,40 @@ function RuleRow({ propertyId, rule, onSaved }: { propertyId: string; rule: Rule
   );
 }
 
+const coordinate = (value: number | null | undefined) => (value == null ? '' : String(value).replace('.', ','));
+
+/**
+ * The position typed into the two fields: null when both are empty. Decimals may be written with a comma.
+ * Anything else that is not two numbers in range is refused here, with the server's own error code.
+ */
+export function parsePosition(latitude: string, longitude: string): { latitude: number; longitude: number } | null {
+  if (latitude.trim() === '' && longitude.trim() === '') return null;
+  const read = (text: string) => (/^\s*-?\d+([.,]\d+)?\s*$/.test(text) ? Number(text.trim().replace(',', '.')) : NaN);
+  const [lat, lon] = [read(latitude), read(longitude)];
+  if (!(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) throw new ApiError(400, 'invalid_location');
+  return { latitude: lat, longitude: lon };
+}
+
 function PropertySettings({ property, points, pricing, rulesVersion, hidden, onSaved }: { property: PropertySummary; points: Points; pricing: boolean; rulesVersion: number; hidden: boolean; onSaved: () => void }) {
   // Linking a heat pump adds rules, so the list is fetched again when links change.
   const rules = useLoad(() => api.rules(property.id), `rules|${property.id}|${rulesVersion}`);
   const [name, setName] = useState(property.name);
   const [monitoring, setMonitoring] = useState(property.monitoringEnabled);
   const [point, setPoint] = useState('');
+  const [latitude, setLatitude] = useState(coordinate(property.latitude));
+  const [longitude, setLongitude] = useState(coordinate(property.longitude));
   const [result, busy, run] = useAction();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // A pair copied from a map ("55.9321, 11.6012") pasted into the first field fills both.
+  const typeLatitude = (text: string) => {
+    const pair = /^\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*$/.exec(text);
+    if (pair) {
+      setLatitude(pair[1].replace('.', ','));
+      setLongitude(pair[2].replace('.', ','));
+    } else {
+      setLatitude(text);
+    }
+  };
   const [deleteResult, deleting, runDelete] = useAction();
 
   return (
@@ -330,6 +356,20 @@ function PropertySettings({ property, points, pricing, rulesVersion, hidden, onS
             points={points}
           />
         </div>
+        <div className="fields">
+          <label className="field">
+            Breddegrad
+            <input type="text" inputMode="decimal" placeholder="55,93" value={latitude} onChange={(e) => typeLatitude(e.target.value)} />
+          </label>
+          <label className="field">
+            Længdegrad
+            <input type="text" inputMode="decimal" placeholder="11,60" value={longitude} onChange={(e) => setLongitude(e.target.value)} />
+          </label>
+        </div>
+        <p className="hint">
+          Positionen bruges kun til at hente udetemperaturen (Open-Meteo), så forbruget kan sammenlignes med kulden. To decimaler er nok.
+          Koordinater kopieret fra et kort kan sættes ind i det første felt. Temperaturen hentes ved næste synkronisering.
+        </p>
         {point !== '' && property.hasMeteringPoint && (
           <p className="note note-warn">Når målepunktet skiftes, slettes ejendommens hidtidige forbrugsdata og alarmer, og historikken hentes igen.</p>
         )}
@@ -343,7 +383,7 @@ function PropertySettings({ property, points, pricing, rulesVersion, hidden, onS
             className="button"
             disabled={busy}
             onClick={async () => {
-              if (await run(() => api.saveProperty(property.id, name, point || null, monitoring), 'Gemt.')) {
+              if (await run(() => api.saveProperty(property.id, name, point || null, monitoring, parsePosition(latitude, longitude)), 'Gemt.')) {
                 setPoint('');
                 onSaved();
               }
@@ -426,20 +466,21 @@ function NewProperty({ points, hidden, onCreated }: { points: Points; hidden: bo
   );
 }
 
-function Notifications({ hidden }: { hidden: boolean }) {
+function Notifications({ hidden, pricing }: { hidden: boolean; pricing: boolean }) {
   const settings = useLoad(() => api.notificationSettings(), 'notification-settings');
   return (
     <section className="panel" hidden={hidden}>
       <PanelHead title="Notifikationer" about="Beskeder sendes via Telegram." />
       {settings.error && <ErrorNote message={settings.error} onRetry={settings.reload} />}
       {/* The form starts from the stored settings, so it is only mounted once they are known. */}
-      {settings.data ? <NotificationForm initial={settings.data} /> : !settings.error && <p className="muted">Henter…</p>}
+      {settings.data ? <NotificationForm initial={settings.data} pricing={pricing} /> : !settings.error && <p className="muted">Henter…</p>}
     </section>
   );
 }
 
-function NotificationForm({ initial }: { initial: NotificationSettings }) {
+function NotificationForm({ initial, pricing }: { initial: NotificationSettings; pricing: boolean }) {
   const [daily, setDaily] = useState(initial.dailyReportEnabled);
+  const [tomorrow, setTomorrow] = useState(initial.tomorrowPricesEnabled ?? true);
   const [recipients, setRecipients] = useState(initial.recipients.join(', '));
   const [result, busy, run] = useAction();
   const [testResult, testing, runTest] = useAction();
@@ -459,12 +500,18 @@ function NotificationForm({ initial }: { initial: NotificationSettings }) {
         <div className="switch-row">
           <Switch checked={daily} onChange={setDaily}>Send daglig statusrapport kl. 09:00</Switch>
         </div>
+        {pricing && (
+          <div className="switch-row">
+            <Switch checked={tomorrow} onChange={setTomorrow}>Send elpriser for i morgen, når de skiller sig ud</Switch>
+            <span className="hint">Sendes om eftermiddagen ved negative priser, en meget dyr time eller et gennemsnit langt fra de seneste dage.</span>
+          </div>
+        )}
         <div className="actions">
           <button
             type="button"
             className="button"
             disabled={busy}
-            onClick={() => run(() => api.saveNotificationSettings({ dailyReportEnabled: daily, recipients: recipients.split(',').map((r) => r.trim()).filter(Boolean) }), 'Gemt.')}
+            onClick={() => run(() => api.saveNotificationSettings({ dailyReportEnabled: daily, tomorrowPricesEnabled: tomorrow, recipients: recipients.split(',').map((r) => r.trim()).filter(Boolean) }), 'Gemt.')}
           >
             Gem
           </button>
@@ -755,7 +802,7 @@ export function Settings({ me, section }: { me: Me; section?: string }) {
                   window.location.hash = sectionHref(propertySection(id));
                 }}
               />
-              <Notifications hidden={active !== NOTIFICATIONS} />
+              <Notifications hidden={active !== NOTIFICATIONS} pricing={features.data?.pricing ?? false} />
               {heatpumpOn && (
                 <HeatPumpSettings
                   status={heatpump}

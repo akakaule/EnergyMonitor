@@ -328,6 +328,45 @@ main > .small {
   font-variant-numeric: tabular-nums;
 }
 
+.hero-unit {
+  font-size: 1.1rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--ink-2);
+}
+
+.price-card h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.legend.price-periods {
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.price-breakdown {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--inset);
+}
+
+.price-breakdown-head {
+  margin: 0;
+}
+
+.price-breakdown .stats {
+  margin-top: 6px;
+  gap: 4px 18px;
+}
+
+.price-breakdown .stats dd {
+  font-size: 1rem;
+}
+
 .hero-cost {
   margin: 4px 0 0;
   font-size: 1.15rem;
@@ -1350,6 +1389,60 @@ input[type='checkbox'] {
   fill: var(--series-selected);
 }
 
+/* Price charts: the cheapest and the dearest period have their own colour, hours that are over are faded,
+   and the chosen hour is outlined so its colour stays readable. */
+.bar.bar-tone-low {
+  fill: var(--good);
+}
+
+.bar.bar-tone-high {
+  fill: var(--serious);
+}
+
+.bar.bar-tone-past {
+  opacity: 0.4;
+}
+
+.price-chart .bar-selected {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+/* Scatter plots: one dot per day, a fitted line, and the latest day in the warm colour. */
+.scatter-dot {
+  fill: var(--series);
+  fill-opacity: 0.55;
+  stroke: var(--surface);
+  stroke-width: 1;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.scatter-dot-highlight {
+  fill: var(--series-temperature);
+  fill-opacity: 1;
+}
+
+.scatter-dot-active {
+  fill-opacity: 1;
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.scatter-line {
+  stroke: var(--ink-2);
+  stroke-width: 2;
+}
+
+.axis-title {
+  fill: var(--ink-2);
+}
+
+.scatter .tooltip-value {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
 /* In a sparkline only the latest day is at full strength. */
 .chart-compact .bar:not(.bar-selected) {
   opacity: 0.55;
@@ -1419,6 +1512,33 @@ input[type='checkbox'] {
   height: 12px;
   border-radius: 3px;
   background: var(--series);
+}
+
+.swatch-dot {
+  border-radius: 50%;
+  width: 9px;
+  height: 9px;
+  opacity: 0.6;
+}
+
+.swatch-dot-highlight {
+  background: var(--series-temperature);
+  opacity: 1;
+}
+
+.swatch-line {
+  height: 2px;
+  width: 16px;
+  border-radius: 0;
+  background: var(--ink-2);
+}
+
+.swatch-low {
+  background: var(--good);
+}
+
+.swatch-high {
+  background: var(--serious);
 }
 
 .swatch-partial {

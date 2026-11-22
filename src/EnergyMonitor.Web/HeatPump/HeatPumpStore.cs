@@ -107,6 +107,31 @@ public sealed class HeatPumpStore(ITableBackend tables)
             [.. buckets.Where(b => b.Value.Tn > 0).Select(b => At(b.Key, b.Value.T / b.Value.Tn))],
             [.. buckets.Where(b => b.Value.Hn > 0).Select(b => At(b.Key, b.Value.H / b.Value.Hn))]);
     }
+
+    /// <summary>
+    /// The mean indoor temperature of each local day in [from, to). Hours count equally whatever number of
+    /// readings they hold, and a day with readings in fewer than <paramref name="minHours"/> hours has no mean.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<DateOnly, double>> DailyMeansAsync(
+        string deviceId, DateTimeOffset fromUtc, DateTimeOffset toUtc, TimeZoneInfo zone, int minHours, CancellationToken ct)
+    {
+        var hours = new List<(DateOnly Day, double C)>();
+        var first = HourOf(fromUtc.ToUnixTimeSeconds());
+        for (var month = new DateTime(first.Year, first.Month, 1, 0, 0, 0, DateTimeKind.Utc); month < toUtc.UtcDateTime; month = month.AddMonths(1))
+        {
+            foreach (var row in await tables.QueryAsync(Table, Pk(deviceId, month), Rk(first), Rk(HourOf(toUtc.ToUnixTimeSeconds())), null, ct))
+            {
+                var readings = StoreJson.Read<HeatPumpHour>(row).Points.Where(p => p.Temperature is not null).ToArray();
+                if (readings.Length > 0)
+                {
+                    var local = TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(readings[0].Time), zone);
+                    hours.Add((DateOnly.FromDateTime(local.DateTime), readings.Average(p => p.Temperature!.Value)));
+                }
+            }
+        }
+
+        return hours.GroupBy(h => h.Day).Where(g => g.Count() >= minHours).ToDictionary(g => g.Key, g => g.Average(h => h.C));
+    }
 }
 
 public sealed record HeatPumpLink(string DeviceId, string PropertyId);

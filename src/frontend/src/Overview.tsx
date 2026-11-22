@@ -3,6 +3,7 @@ import { BarChart } from './BarChart';
 import { AlertList, ErrorNote, StatusBadge, useLoad } from './common';
 import { addDays, age, dateTime, dayRange, kWh, longDate, percent, shortDate } from './format';
 import { approxKr } from './Pricing';
+import { PriceCards } from './Prices';
 
 /** The approximate price of a span of days, or a dash while it loads or cannot be had. */
 function Approx({ id, from, to }: { id: string; from: string; to: string }) {
@@ -134,6 +135,8 @@ export function Overview() {
       {properties.data?.length === 0 && (
         <p className="note note-info">Der er ikke oprettet nogen ejendomme endnu. Opret dem under Indstillinger.</p>
       )}
+
+      {features.data?.pricing && properties.data && <PriceCards properties={properties.data} />}
 
       <section>
         <h2 className="section-title">
