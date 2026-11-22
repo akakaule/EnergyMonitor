@@ -1,6 +1,7 @@
 using EnergyMonitor.Core.Model;
 using EnergyMonitor.Core.Text;
 using EnergyMonitor.Core.Time;
+using EnergyMonitor.Core.Weather;
 
 namespace EnergyMonitor.Core.Alerts;
 
@@ -12,6 +13,11 @@ public sealed record RuleEvaluation(IReadOnlyList<AlertEvent> Created, IReadOnly
 /// <summary>
 /// Deterministic v1 rules. Pure: the same days, rules and existing events always give the same result,
 /// so re-running after a repeated sync or a restart creates nothing new.
+/// <para>
+/// Low and high consumption compare a day with the median of the preceding days, or, on the days an
+/// expectation from the outdoor temperature is given and the rule allows it, with that expectation: a cold
+/// snap is then not "high", and a mild week does not hide a house that has stopped heating.
+/// </para>
 /// </summary>
 public static class RuleEngine
 {
@@ -24,7 +30,8 @@ public static class RuleEngine
         IReadOnlyList<AlertEvent> existing,
         DateOnly evaluateFrom,
         DateTimeOffset now,
-        TimeZoneInfo zone)
+        TimeZoneInfo zone,
+        IReadOnlyDictionary<DateOnly, WeatherExpectation>? expected = null)
     {
         var work = new WorkingSet(existing);
         var ordered = days.OrderBy(d => d.LocalDate).ToList();
@@ -34,7 +41,7 @@ public static class RuleEngine
             var rule = rules.FirstOrDefault(r => r.Type == type);
             if (rule is { Enabled: true } && property.MonitoringEnabled)
             {
-                EvaluateRelative(property, rule, ordered, evaluateFrom, now, work);
+                EvaluateRelative(property, rule, ordered, evaluateFrom, now, work, expected);
             }
         }
 
@@ -53,7 +60,8 @@ public static class RuleEngine
         List<DailyConsumption> days,
         DateOnly evaluateFrom,
         DateTimeOffset now,
-        WorkingSet work)
+        WorkingSet work,
+        IReadOnlyDictionary<DateOnly, WeatherExpectation>? expected)
     {
         var low = rule.Type == RuleType.LowConsumption;
         var p = rule.Params;
@@ -61,7 +69,9 @@ public static class RuleEngine
         // Only complete local days are ever analysed; partial and missing days are skipped entirely.
         foreach (var day in days.Where(d => d.IsComplete && d.LocalDate >= evaluateFrom))
         {
-            var baseline = Baseline.For(days, day.LocalDate, p);
+            // A day with an expectation from its outdoor temperature is judged against that; the rest against the median.
+            var weather = p.WeatherAdjusted ? expected?.GetValueOrDefault(day.LocalDate) : null;
+            var baseline = weather is null ? Baseline.For(days, day.LocalDate, p) : Math.Round(Math.Max(0, weather.ExpectedKWh), 3);
             if (baseline is null)
             {
                 continue;
@@ -98,8 +108,8 @@ public static class RuleEngine
                 work.Create(new AlertEvent(
                     property.Id, rule.Id, rule.Type, day.LocalDate, day.LocalDate, severity, AlertState.Open,
                     kWh, baseline, threshold,
-                    Explain(low, day.LocalDate, kWh, baseline.Value, p, 1),
-                    p, now));
+                    Explain(low, day.LocalDate, kWh, baseline.Value, p, 1, weather),
+                    p, now) { OutdoorC = weather?.OutdoorC });
                 continue;
             }
 
@@ -115,16 +125,18 @@ public static class RuleEngine
                 Baseline = baseline,
                 Threshold = threshold,
                 ParamsSnapshot = p,
-                Explanation = Explain(low, day.LocalDate, kWh, baseline.Value, p, consecutive),
+                Explanation = Explain(low, day.LocalDate, kWh, baseline.Value, p, consecutive, weather),
+                OutdoorC = weather?.OutdoorC,
             });
         }
     }
 
-    private static string Explain(bool low, DateOnly date, double kWh, double baseline, RuleParams p, int consecutive)
+    private static string Explain(bool low, DateOnly date, double kWh, double baseline, RuleParams p, int consecutive, WeatherExpectation? weather)
     {
-        var text = low
-            ? $"Døgnforbrug {Da.KWh(kWh)} d. {Da.ShortDate(date)} er under {Da.Percent(p.ThresholdPercent)} af medianen ({Da.KWh(baseline)}) for de foregående komplette døgn."
-            : $"Døgnforbrug {Da.KWh(kWh)} d. {Da.ShortDate(date)} er over {Da.Percent(p.ThresholdPercent)} af medianen ({Da.KWh(baseline)}) for de foregående komplette døgn.";
+        var text = $"Døgnforbrug {Da.KWh(kWh)} d. {Da.ShortDate(date)} er {(low ? "under" : "over")} {Da.Percent(p.ThresholdPercent)} af "
+            + (weather is null
+                ? $"medianen ({Da.KWh(baseline)}) for de foregående komplette døgn."
+                : $"det forventede ({Da.KWh(baseline)}) ved {Da.Celsius(weather.OutdoorC)} ude.");
         if (consecutive > 1)
         {
             text += $" {consecutive} døgn i træk.";

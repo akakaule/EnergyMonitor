@@ -98,4 +98,51 @@ public sealed class HeatingAnalysisTests
         Assert.Equal(First, result.Days[0].Date);
         Assert.Equal(First.AddDays(19), result.Days[^1].Date);
     }
+
+    [Fact]
+    public void Expectation_ComesFromTheEarlierDaysOnly_SoADayNeverExplainsItself()
+    {
+        // 40 days on the line, then a day at 2 °C that used far too little, and a later day that would bend the line.
+        var days = Days(40, outside => 2 + (0.5 * (17 - outside))).ToList();
+        var day = First.AddDays(40);
+        days.Add((day, 1, 2, null));
+        days.Add((day.AddDays(1), 500, 2, null));
+
+        var expectation = HeatingAnalysis.Expect(days, day, 17, 30, 0.5);
+
+        Assert.Equal(9.5, expectation!.ExpectedKWh, 9);
+        Assert.Equal(2, expectation.OutdoorC);
+    }
+
+    [Fact]
+    public void Expectation_IsWithheld_WhenTheEarlierDaysGiveNoDependableLine()
+    {
+        var good = Days(40, outside => 2 + (0.5 * (17 - outside))).ToList();
+        var day = First.AddDays(40);
+        good.Add((day, 5, 3, null));
+        Assert.NotNull(HeatingAnalysis.Expect(good, day, 17, 30, 0.5));
+
+        Assert.Null(HeatingAnalysis.Expect(good, day, 17, 41, 0.5)); // too few days
+        Assert.Null(HeatingAnalysis.Expect(good, day.AddDays(5), 17, 30, 0.5)); // the day itself is not there
+
+        var unrelated = Days(40, _ => 0).Select((d, i) => (d.Item1, i % 2 == 0 ? 4d : 8d, d.Item3, d.Item4)).ToList();
+        unrelated.Add((day, 5, 3, null));
+        Assert.Null(HeatingAnalysis.Expect(unrelated, day, 17, 30, 0.5)); // the cold explains nothing
+
+        var backwards = Days(40, outside => 2 + (0.5 * outside)).ToList(); // colder days use less
+        backwards.Add((day, 5, 3, null));
+        Assert.Null(HeatingAnalysis.Expect(backwards, day, 17, 30, 0.5));
+    }
+
+    [Fact]
+    public void Expectation_NeedsTheIndoorTemperatureOfTheDay_WhenTheLineIsMeasuredAgainstIt()
+    {
+        var days = Days(40, outside => 1 + (0.4 * Math.Max(0, 10 - outside)), indoor: _ => 10).ToList();
+        var day = First.AddDays(40);
+        days.Add((day, 3, 0, null));
+        Assert.Null(HeatingAnalysis.Expect(days, day, 17, 30, 0.5));
+
+        days[^1] = (day, 3, 0, 12);
+        Assert.Equal(1 + (0.4 * 12), HeatingAnalysis.Expect(days, day, 17, 30, 0.5)!.ExpectedKWh, 9);
+    }
 }

@@ -21,6 +21,17 @@ public sealed class WeatherOptions
 
     /// <summary>The indoor temperature assumed for a property without a recorded one.</summary>
     public double BaseTemperatureC { get; set; } = HeatingAnalysis.DefaultBaseC;
+
+    /// <summary>
+    /// The consumption alarms judge a day by its outdoor temperature only when the days before it give a
+    /// line through at least this many days that explains at least this share (0–1) of their variation.
+    /// </summary>
+    public int AlarmMinDays { get; set; } = 30;
+
+    public double AlarmMinRSquared { get; set; } = 0.5;
+
+    /// <summary>How many days before the analysed day the line is fitted to.</summary>
+    public int AlarmLookbackDays { get; set; } = 90;
 }
 
 /// <summary>Hourly outdoor temperature (2 m above ground) at a position, from Open-Meteo.</summary>
@@ -201,7 +212,11 @@ public sealed partial class WeatherSyncService(
 
 /// <summary>What the heating analysis of a property returns. <see cref="Status"/> is NoLocation, InsufficientData or Ok.</summary>
 public sealed record HeatingView(string PropertyId, string Status, string Unit, int PeriodDays, double BaseTemperatureC, bool UsesIndoor,
-    HeatingModel? Model, HeatingDay? Latest, DateTimeOffset? LastWeatherSyncUtc, string? WeatherErrorCode, IReadOnlyList<HeatingDay> Days);
+    HeatingModel? Model, HeatingDay? Latest, DateTimeOffset? LastWeatherSyncUtc, string? WeatherErrorCode, IReadOnlyList<HeatingDay> Days)
+{
+    /// <summary>True when the line over this period is good enough for the consumption alarms to judge days by.</summary>
+    public bool DependableForAlarms { get; init; }
+}
 
 public sealed class HeatingQueryService(
     IPropertyStore properties, IConsumptionStore consumption, WeatherStore weather, HeatPumpStore heatPumps, HeatPumpStateService heatPumpState,
@@ -229,17 +244,57 @@ public sealed class HeatingQueryService(
             return new(propertyId, NoLocation, "kWh", days, baseC, false, null, null, null, null, []);
         }
 
+        var today = LocalDay.Of(time.GetUtcNow(), LocalDay.Zone(property.TimeZone));
+        var input = await InputAsync(property, today.AddDays(-days), today.AddDays(-1), ct);
+        var result = HeatingAnalysis.Analyse(input, baseC);
+        var status = await weather.GetStatusAsync(propertyId, ct);
+        return new(propertyId, result.Status, "kWh", days, baseC, result.UsesIndoor, result.Model, result.Days.LastOrDefault(),
+            status.LastSuccessUtc, status.ErrorCode, result.Days)
+        {
+            DependableForAlarms = result.Model is { } model && HeatingAnalysis.IsDependable(model, options.Value.AlarmMinDays, options.Value.AlarmMinRSquared),
+        };
+    }
+
+    /// <summary>
+    /// What each complete day from <paramref name="from"/> to <paramref name="to"/> should have used for its
+    /// outdoor temperature, judged from the days before it. Days without a dependable expectation are left
+    /// out, and a property without a position has none.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<DateOnly, WeatherExpectation>> ExpectationsAsync(Property property, DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        var result = new Dictionary<DateOnly, WeatherExpectation>();
+        if (property.Latitude is null || property.Longitude is null)
+        {
+            return result;
+        }
+
+        var o = options.Value;
+        var input = await InputAsync(property, from.AddDays(-o.AlarmLookbackDays), to, ct);
+        foreach (var day in input.Where(d => d.Date >= from))
+        {
+            var window = input.Where(d => d.Date >= day.Date.AddDays(-o.AlarmLookbackDays) && d.Date <= day.Date).ToArray();
+            if (HeatingAnalysis.Expect(window, day.Date, o.BaseTemperatureC, o.AlarmMinDays, o.AlarmMinRSquared) is { } expectation)
+            {
+                result[day.Date] = expectation;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>The days from <paramref name="from"/> to <paramref name="to"/> with complete consumption and a temperature for every hour.</summary>
+    private async Task<List<(DateOnly Date, double KWh, double OutdoorC, double? IndoorC)>> InputAsync(Property property, DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        var propertyId = property.Id;
         var zone = LocalDay.Zone(property.TimeZone);
-        var today = LocalDay.Of(time.GetUtcNow(), zone);
-        var from = today.AddDays(-days);
-        var (startUtc, endUtc) = (LocalDay.StartUtc(from, zone), LocalDay.StartUtc(today, zone));
+        var (startUtc, endUtc) = (LocalDay.StartUtc(from, zone), LocalDay.StartUtc(to.AddDays(1), zone));
         var outdoor = await weather.GetAsync(propertyId, startUtc, endUtc, ct);
         var indoor = (await heatPumpState.GetLinksAsync(ct)).FirstOrDefault(l => l.PropertyId == propertyId) is { } link
             ? await heatPumps.DailyMeansAsync(link.DeviceId, startUtc, endUtc, zone, MinIndoorHours, ct)
             : new Dictionary<DateOnly, double>();
 
         var input = new List<(DateOnly, double, double, double?)>();
-        foreach (var day in (await consumption.GetDailyAsync(propertyId, from, today.AddDays(-1), ct)).Where(d => d.IsComplete && d.KWh is not null))
+        foreach (var day in (await consumption.GetDailyAsync(propertyId, from, to, ct)).Where(d => d.IsComplete && d.KWh is not null))
         {
             var (dayStart, dayEnd) = LocalDay.Bounds(day.LocalDate, zone);
             var temperatures = new List<double>();
@@ -255,9 +310,6 @@ public sealed class HeatingQueryService(
             }
         }
 
-        var result = HeatingAnalysis.Analyse(input, baseC);
-        var status = await weather.GetStatusAsync(propertyId, ct);
-        return new(propertyId, result.Status, "kWh", days, baseC, result.UsesIndoor, result.Model, result.Days.LastOrDefault(),
-            status.LastSuccessUtc, status.ErrorCode, result.Days);
+        return input;
     }
 }

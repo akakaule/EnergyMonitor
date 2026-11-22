@@ -148,7 +148,10 @@ public sealed class ReportService(
     }
 }
 
-/// <summary>Sync, then rules, then delivery: the order every scheduled or manual run follows.</summary>
+/// <summary>
+/// Sync, outdoor temperature, then rules, then delivery: the order every scheduled or manual run follows.
+/// The temperature comes before the rules because they judge the newest days by it.
+/// </summary>
 public sealed partial class MonitorPipeline(
     SyncService sync,
     EnergyMonitor.Web.Pricing.PriceSyncService prices,
@@ -166,11 +169,12 @@ public sealed partial class MonitorPipeline(
             return null;
         }
 
+        await weather.RunAsync(ct);
+
         // Rules run after a failed sync too: missing data and source failures are found there.
         await alerts.EvaluateAsync(ct);
         await dispatcher.DispatchAsync(ct);
         await RunPricesAsync(spotOnly: false, ct);
-        await weather.RunAsync(ct);
         return run;
     }
 

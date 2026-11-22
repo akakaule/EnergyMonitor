@@ -80,6 +80,9 @@ public sealed class FakeState
 
     public int WeatherCalls { get; set; }
 
+    /// <summary>Days with another outdoor temperature (°C, the day's mean) than the fake's slow wave.</summary>
+    public Dictionary<DateOnly, double> OutdoorOverrides { get; } = [];
+
     /// <summary>What a degree-day costs the summer house in the "heating" scenario, on top of 2 kWh a day.</summary>
     public const double HeatingKWhPerDegreeDay = 0.55;
 
@@ -111,6 +114,7 @@ public sealed class FakeState
             SpotDayFactors.Clear();
             SpotNegativeDays.Clear();
             WeatherDown = false;
+            OutdoorOverrides.Clear();
             Sensibo.Reset();
         }
     }
@@ -136,6 +140,11 @@ public sealed class FakeState
                     return true;
                 case "low":
                     DayFactors[(Sommerhus, LatestAvailable)] = 0.15;
+                    return true;
+                case "cold-snap":
+                    // The latest day was 25 degrees below zero: cold enough that what it costs is more than twice
+                    // the median of the days before. Run "heating" after it, so the consumption follows.
+                    OutdoorOverrides[LatestAvailable] = -25;
                     return true;
                 case "low2":
                     DayFactors[(Sommerhus, LatestAvailable)] = 0.15;
@@ -195,7 +204,7 @@ public sealed class FakeState
     }
 
     /// <summary>The fake outdoor temperature of a day, °C: between 1 and 11, changing slowly from day to day.</summary>
-    public static double OutdoorDayMean(DateOnly date) => 6 + (5 * Math.Sin(date.DayNumber / 9.0));
+    public double OutdoorDayMean(DateOnly date) => OutdoorOverrides.TryGetValue(date, out var c) ? c : 6 + (5 * Math.Sin(date.DayNumber / 9.0));
 
     /// <summary>The day's mean with an afternoon two degrees warmer and a night two degrees colder.</summary>
     public double OutdoorC(DateTimeOffset hourUtc)
@@ -382,7 +391,7 @@ public static class FakeUpstreamsApp
         app.MapGet("/control/telegram", (FakeState state) => state.Locked(() =>
             Results.Json(state.TelegramMessages.Select(m => new { chatId = m.ChatId, text = m.Text }).ToArray())));
 
-        app.MapGet("/", () => "Fake Eloverblik + Telegram + Sensibo. POST /control/scenario/{normal|low|low2|high|missing|partial|outage|token-expired|telegram-down|telegram-up|heating|weather-down|cold|offline|sensibo-down|sensibo-key-rejected}, GET /control/telegram");
+        app.MapGet("/", () => "Fake Eloverblik + Telegram + Sensibo. POST /control/scenario/{normal|low|cold-snap|low2|high|missing|partial|outage|token-expired|telegram-down|telegram-up|heating|weather-down|cold|offline|sensibo-down|sensibo-key-rejected}, GET /control/telegram");
     }
 
     private static string? Bearer(HttpRequest request)

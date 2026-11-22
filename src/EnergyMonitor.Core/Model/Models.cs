@@ -124,6 +124,12 @@ public sealed record RuleParams
     /// <summary>Heat pump offline: minutes since the device was last seen by Sensibo.</summary>
     public int OfflineMinutes { get; init; } = 60;
 
+    /// <summary>
+    /// Low and high consumption: compare the day with the consumption expected for its outdoor temperature
+    /// instead of the median, on the days such an expectation exists. On, also for rules stored before it existed.
+    /// </summary>
+    public bool WeatherAdjusted { get; init; } = true;
+
     public static RuleParams DefaultFor(RuleType type) => type switch
     {
         RuleType.LowConsumption => new RuleParams { ThresholdPercent = 50 },
@@ -192,6 +198,12 @@ public sealed record AlertEvent(
 {
     /// <summary>Property id used for events about the data source itself.</summary>
     public const string SystemPropertyId = "system";
+
+    /// <summary>
+    /// Set when a consumption rule judged the day against what its outdoor temperature (°C) leads one to
+    /// expect: <see cref="Baseline"/> is then that expected consumption, not a median.
+    /// </summary>
+    public double? OutdoorC { get; init; }
 
     [JsonIgnore]
     public string Id => MakeId(PropertyId, RuleType, FirstLocalDate, Sequence);

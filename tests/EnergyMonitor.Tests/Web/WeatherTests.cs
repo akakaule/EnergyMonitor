@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EnergyMonitor.Core.Abstractions;
+using EnergyMonitor.Core.Alerts;
 using EnergyMonitor.Core.Model;
 using EnergyMonitor.FakeUpstreams;
 using EnergyMonitor.Web.HeatPump;
@@ -219,5 +220,96 @@ public sealed class WeatherTests
         Assert.Equal(HttpStatusCode.BadRequest, (await viewer.GetAsync("/api/properties/sommerhus/heating?days=366")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await viewer.GetAsync("/api/properties/sommerhus/heating?days=365")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/properties/absent/heating")).StatusCode);
+    }
+
+    private static readonly DateOnly Latest = new(2026, 11, 6);
+
+    /// <summary>Sommerhus with a position, consumption that follows the fake outdoor temperature, and a cold snap on the latest day.</summary>
+    private static async Task<AppFactory> ColdSnapAsync(double latestDayFactor = 1, bool position = true)
+    {
+        var app = new AppFactory();
+        await app.SeedPropertiesAsync();
+        app.Fake.ApplyScenario("cold-snap");
+        app.Fake.ApplyScenario("heating");
+        app.Fake.DayFactors[(FakeState.Sommerhus, Latest)] *= latestDayFactor;
+        if (position)
+        {
+            using var admin = app.ClientFor(AppFactory.Admin);
+            await SetLocationAsync(admin, "sommerhus", 55.93, 11.6);
+        }
+
+        return app;
+    }
+
+    [Fact]
+    public async Task AColdSnap_RaisesAHighAlarmAgainstTheMedian_ButNoneWhenTheOutdoorTemperatureIsKnown()
+    {
+        // 25 degrees below zero costs about 25 kWh, some three times the median of the days before.
+        using (var median = await ColdSnapAsync(position: false))
+        {
+            await median.SyncAsync();
+            var e = Assert.Single(await median.EventsAsync());
+            Assert.Equal(RuleType.HighConsumption, e.RuleType);
+            Assert.Null(e.OutdoorC);
+        }
+
+        using var weather = await ColdSnapAsync();
+        await weather.SyncAsync();
+
+        Assert.Empty(await weather.EventsAsync());
+        Assert.Empty(weather.Telegrams);
+    }
+
+    [Fact]
+    public async Task AHouseThatStopsHeatingInTheCold_IsLow_EvenWhenTheDayLooksNormalAgainstTheMedian()
+    {
+        // The latest day used 40 % of what 25 degrees below zero costs: about 10 kWh, an ordinary day by the median.
+        using (var median = await ColdSnapAsync(0.4, position: false))
+        {
+            await median.SyncAsync();
+            Assert.Empty(await median.EventsAsync());
+        }
+
+        using var weather = await ColdSnapAsync(0.4);
+        await weather.SyncAsync();
+        await weather.SyncAsync();
+
+        var e = Assert.Single(await weather.EventsAsync());
+        Assert.Equal((RuleType.LowConsumption, Latest, AlertSeverity.Observer), (e.RuleType, e.FirstLocalDate, e.Severity));
+        Assert.InRange(e.OutdoorC!.Value, -25.5, -24.5);
+        Assert.InRange(e.Baseline!.Value, 22, 28);
+        Assert.Contains("af det forventede (", e.Explanation);
+        Assert.Contains(" °C ude.", e.Explanation);
+        Assert.Contains(e.Explanation, Assert.Single(weather.Telegrams));
+
+        using var client = weather.ClientFor(AppFactory.Viewer);
+        var alert = (await client.GetJsonAsync("/api/alerts?state=open")).EnumerateArray().Single();
+        Assert.Equal(e.OutdoorC.Value, alert.GetProperty("outdoorC").GetDouble());
+        Assert.True((await client.GetJsonAsync("/api/properties/sommerhus/heating")).GetProperty("dependableForAlarms").GetBoolean());
+    }
+
+    [Fact]
+    public async Task TurningTheWeatherComparisonOff_OrAFailingWeatherSource_FallsBackToTheMedian()
+    {
+        using (var off = await ColdSnapAsync())
+        {
+            using var admin = off.ClientFor(AppFactory.Admin);
+            var rule = (await admin.GetJsonAsync("/api/properties/sommerhus/rules")).EnumerateArray().Single(r => r.GetProperty("type").GetString() == "HighConsumption");
+            Assert.True(rule.GetProperty("params").GetProperty("weatherAdjusted").GetBoolean());
+            var parameters = System.Text.Json.Nodes.JsonNode.Parse(rule.GetProperty("params").GetRawText())!;
+            parameters["weatherAdjusted"] = false;
+            var saved = await admin.PutAsJsonAsync($"/api/properties/sommerhus/rules/{rule.GetProperty("id").GetString()}", new { enabled = true, @params = parameters });
+            Assert.Equal(HttpStatusCode.NoContent, saved.StatusCode);
+
+            await off.SyncAsync();
+            Assert.Equal(RuleType.HighConsumption, Assert.Single(await off.EventsAsync()).RuleType);
+        }
+
+        using var down = await ColdSnapAsync();
+        down.Fake.WeatherDown = true;
+        await down.SyncAsync();
+        var e = Assert.Single(await down.EventsAsync());
+        Assert.Equal(RuleType.HighConsumption, e.RuleType);
+        Assert.Null(e.OutdoorC);
     }
 }

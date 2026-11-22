@@ -17,6 +17,9 @@ public sealed record HeatingResult(string Status, double BaseTemperatureC, bool 
     public const string InsufficientData = "InsufficientData";
 }
 
+/// <summary>What a day's outdoor temperature leads one to expect it to use.</summary>
+public sealed record WeatherExpectation(double ExpectedKWh, double OutdoorC);
+
 /// <summary>
 /// How a property's daily electricity use follows the cold. A day's degree-days are how many degrees
 /// colder it was outside than inside, never below zero: with a recorded indoor temperature (a heat pump
@@ -30,6 +33,36 @@ public static class HeatingAnalysis
 
     /// <summary>Fewer days than this give no model.</summary>
     public const int MinDays = 14;
+
+    /// <summary>
+    /// What <paramref name="date"/> should have used, judged from the days before it only: a day never
+    /// takes part in its own expectation. Null when the earlier days give no dependable line (too few,
+    /// a weak fit, or colder days that do not cost more), or when the day lacks the temperature the line
+    /// is measured against.
+    /// </summary>
+    public static WeatherExpectation? Expect(
+        IReadOnlyCollection<(DateOnly Date, double KWh, double OutdoorC, double? IndoorC)> source, DateOnly date,
+        double baseC, int minDays, double minRSquared)
+    {
+        var earlier = Analyse(source.Where(d => d.Date < date), baseC);
+        if (earlier.Model is not { } model || !IsDependable(model, minDays, minRSquared) || !source.Any(d => d.Date == date))
+        {
+            return null;
+        }
+
+        var day = source.First(d => d.Date == date);
+        if (earlier.UsesIndoor && day.IndoorC is null)
+        {
+            return null;
+        }
+
+        var degreeDays = Math.Max(0, (earlier.UsesIndoor ? day.IndoorC!.Value : baseC) - day.OutdoorC);
+        return new(model.BaseKWhPerDay + (model.KWhPerDegreeDay * degreeDays), day.OutdoorC);
+    }
+
+    /// <summary>True when a line is good enough to judge single days by.</summary>
+    public static bool IsDependable(HeatingModel model, int minDays, double minRSquared) =>
+        model.Days >= minDays && model.RSquared >= minRSquared && model.KWhPerDegreeDay > 0;
 
     public static HeatingResult Analyse(IEnumerable<(DateOnly Date, double KWh, double OutdoorC, double? IndoorC)> source, double baseC = DefaultBaseC)
     {

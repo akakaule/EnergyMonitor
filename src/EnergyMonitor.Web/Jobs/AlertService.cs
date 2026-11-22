@@ -110,6 +110,7 @@ public sealed partial class AlertService(
     SummaryService summaries,
     EloverblikTokenStatus token,
     HeatPumpStateService heatPumps,
+    EnergyMonitor.Web.Weather.HeatingQueryService heating,
     TimeProvider time,
     IOptions<SyncOptions> syncOptions,
     IOptions<ScheduleOptions> schedule,
@@ -128,8 +129,11 @@ public sealed partial class AlertService(
 
             // Only the days a sync can still change are analysed, so the first 90-day import cannot
             // raise alarms about weeks-old consumption.
-            var result = RuleEngine.EvaluateProperty(
-                property, rules, days, existing, today.AddDays(-syncOptions.Value.RefetchDays), now, zone);
+            var from = today.AddDays(-syncOptions.Value.RefetchDays);
+            var weatherRules = property.MonitoringEnabled && rules.Any(r =>
+                r.Type is RuleType.LowConsumption or RuleType.HighConsumption && r.Enabled && r.Params.WeatherAdjusted);
+            var expected = weatherRules ? await heating.ExpectationsAsync(property, from, today, ct) : null;
+            var result = RuleEngine.EvaluateProperty(property, rules, days, existing, from, now, zone, expected);
             await ApplyAsync(property.Id, property.Name, result, ct);
         }
 

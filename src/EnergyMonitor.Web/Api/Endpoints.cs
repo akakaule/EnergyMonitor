@@ -56,7 +56,8 @@ public sealed record AlertDto(
     string Explanation,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? AcknowledgedAtUtc,
-    DateTimeOffset? ClosedAtUtc);
+    DateTimeOffset? ClosedAtUtc,
+    double? OutdoorC);
 
 public sealed record RuleDto(string Id, string Type, bool Enabled, RuleParams Params, DateTimeOffset UpdatedAtUtc);
 
@@ -506,7 +507,7 @@ public static partial class Endpoints
             _ => e.Severity == AlertSeverity.Alarm ? "Alarm" : "Observer",
         },
         e.FirstLocalDate, e.LastLocalDate, e.Observed, e.Baseline, e.Threshold, e.Explanation,
-        e.CreatedAtUtc, e.AcknowledgedAtUtc, e.ClosedAtUtc);
+        e.CreatedAtUtc, e.AcknowledgedAtUtc, e.ClosedAtUtc, e.OutdoorC);
 
     [GeneratedRegex("^[0-9]{18}$")]
     private static partial Regex MeteringPointRegex();

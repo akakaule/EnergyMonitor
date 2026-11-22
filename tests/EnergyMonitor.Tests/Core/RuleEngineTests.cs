@@ -12,10 +12,11 @@ public class RuleEngineTests
         IReadOnlyList<AlertEvent>? existing = null,
         Property? property = null,
         List<AlertRule>? rules = null,
-        DateTimeOffset? now = null) =>
+        DateTimeOffset? now = null,
+        IReadOnlyDictionary<DateOnly, EnergyMonitor.Core.Weather.WeatherExpectation>? expected = null) =>
         RuleEngine.EvaluateProperty(
             property ?? TestData.Sommerhus(), rules ?? TestData.DefaultRules(), days, existing ?? [],
-            D.AddDays(-7), now ?? TestData.Noon(D.AddDays(1)), TestData.Zone);
+            D.AddDays(-7), now ?? TestData.Noon(D.AddDays(1)), TestData.Zone, expected);
 
     /// <summary>Applies an evaluation the way the store would, giving the next run's existing events.</summary>
     private static List<AlertEvent> Apply(IReadOnlyList<AlertEvent> existing, RuleEvaluation result)
@@ -364,5 +365,90 @@ public class RuleEngineTests
 
         Assert.Equal(RuleType.SourceFailure, e.RuleType);
         Assert.Contains("udløbet", e.Explanation);
+    }
+
+    private static Dictionary<DateOnly, EnergyMonitor.Core.Weather.WeatherExpectation> Expected(double kWh, double outdoorC, DateOnly? date = null) =>
+        new() { [date ?? D] = new(kWh, outdoorC) };
+
+    [Fact]
+    public void ColdSnap_IsNotHighConsumption_WhenTheDayUsesWhatItsTemperatureExplains()
+    {
+        var days = TestData.History(D, 14, 8);
+        days.Add(TestData.Day(D, 19)); // 238 % of the median
+
+        Assert.Single(Evaluate(days).Created, e => e.RuleType == RuleType.HighConsumption);
+        Assert.Empty(Evaluate(days, expected: Expected(18.5, -12)).Created);
+    }
+
+    [Fact]
+    public void MildDay_IsNotLowConsumption_WhenLittleIsExpected()
+    {
+        var days = TestData.History(D, 14, 8);
+        days.Add(TestData.Day(D, 3.5)); // 44 % of the median
+
+        Assert.Single(Evaluate(days).Created, e => e.RuleType == RuleType.LowConsumption);
+        Assert.Empty(Evaluate(days, expected: Expected(4, 14)).Created);
+    }
+
+    [Fact]
+    public void ADayThatLooksNormal_IsLow_WhenTheColdShouldHaveCostMore_AndTheEventSaysSo()
+    {
+        var days = TestData.History(D, 14, 8);
+        days.Add(TestData.Day(D, 7)); // close to the median, but it was 8 degrees below zero
+
+        Assert.Empty(Evaluate(days).Created);
+        var e = Assert.Single(Evaluate(days, expected: Expected(16, -8)).Created);
+
+        Assert.Equal(RuleType.LowConsumption, e.RuleType);
+        Assert.Equal((7d, 16d, 8d, -8d), (e.Observed, e.Baseline, e.Threshold, e.OutdoorC));
+        Assert.Equal(
+            "Døgnforbrug 7,0 kWh d. 6/11 er under 50 % af det forventede (16,0 kWh) ved −8,0 °C ude. Lavt forbrug er kun en indikator på mulig fejl.",
+            e.Explanation);
+    }
+
+    [Fact]
+    public void WeatherComparison_CanBeTurnedOffPerRule_AndDaysWithoutAnExpectationUseTheMedian()
+    {
+        var days = TestData.History(D, 14, 8);
+        days.Add(TestData.Day(D, 19));
+        var rules = TestData.DefaultRules().Select(r => r with { Params = r.Params with { WeatherAdjusted = false } }).ToList();
+
+        var off = Assert.Single(Evaluate(days, rules: rules, expected: Expected(18.5, -12)).Created);
+        Assert.Null(off.OutdoorC);
+        Assert.Contains("af medianen (8,0 kWh)", off.Explanation);
+
+        // The expectation is for another day: this one falls back to the median.
+        var other = Assert.Single(Evaluate(days, expected: Expected(8, 5, D.AddDays(-1))).Created);
+        Assert.Null(other.OutdoorC);
+    }
+
+    [Fact]
+    public void WeatherComparison_IsOff_WhileTheExpectedConsumptionIsTooSmallToCompareWith()
+    {
+        var days = TestData.History(D, 14, 8);
+        days.Add(TestData.Day(D, 0.4));
+
+        // 0,4 kWh is under half of the 2 kWh expected, but 2 kWh is below the rule's smallest baseline of 3 kWh.
+        Assert.Empty(Evaluate(days, expected: Expected(2, 16)).Created);
+    }
+
+    [Fact]
+    public void ARunningEvent_FollowsEachDaysOwnBasis_AndClosesOnTheFirstDayThatIsAsExpected()
+    {
+        var days = TestData.History(D.AddDays(-1), 14, 8);
+        days.Add(TestData.Day(D.AddDays(-1), 3)); // low against the median; no expectation for this day
+        var first = Evaluate(days);
+        var existing = Apply([], first);
+        Assert.Null(Assert.Single(first.Created).OutdoorC);
+
+        days.Add(TestData.Day(D, 5)); // not low against the median, but 12 kWh was expected
+        var second = Evaluate(days, existing, expected: Expected(12, -3));
+        var updated = Assert.Single(second.Updated);
+        Assert.Equal((AlertSeverity.Alarm, D, 12d, -3d), (updated.Severity, updated.LastLocalDate, updated.Baseline, updated.OutdoorC));
+        Assert.Contains("2 døgn i træk", updated.Explanation);
+
+        // Had the day used what was expected, the event would have closed instead.
+        var closed = Assert.Single(Evaluate(days, existing, expected: Expected(6, 9)).Updated);
+        Assert.Equal(AlertState.Closed, closed.State);
     }
 }
