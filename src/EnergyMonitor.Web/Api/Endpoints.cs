@@ -36,7 +36,9 @@ public sealed record PropertyDto(
     double? DataAgeHours,
     DateTimeOffset? LastSuccessfulSyncUtc,
     int OpenAlerts,
-    IReadOnlyList<DayValueDto> Sparkline);
+    IReadOnlyList<DayValueDto> Sparkline,
+    double? Latitude,
+    double? Longitude);
 
 public sealed record AlertDto(
     string Id,
@@ -60,7 +62,8 @@ public sealed record RuleDto(string Id, string Type, bool Enabled, RuleParams Pa
 
 public sealed record RuleUpdate(bool Enabled, RuleParams Params);
 
-public sealed record PropertyUpdate(string Name, string? MeteringPointId, bool MonitoringEnabled);
+/// <summary>The position is both coordinates or neither; neither removes it.</summary>
+public sealed record PropertyUpdate(string Name, string? MeteringPointId, bool MonitoringEnabled, double? Latitude = null, double? Longitude = null);
 
 /// <summary><see cref="TomorrowPricesEnabled"/> is optional: a client that does not send it leaves it on.</summary>
 public sealed record NotificationSettingsDto(bool DailyReportEnabled, IReadOnlyList<string> Recipients, bool? TomorrowPricesEnabled = null);
@@ -143,6 +146,22 @@ public static partial class Endpoints
                 completeDays = complete.Length,
                 items,
             });
+        });
+
+        api.MapGet("/properties/{id}/heating", async (string id, int? days, EnergyMonitor.Web.Weather.HeatingQueryService heating, CancellationToken ct) =>
+        {
+            try
+            {
+                return Results.Ok(await heating.AnalyseAsync(id, days ?? EnergyMonitor.Web.Weather.HeatingQueryService.DefaultDays, ct));
+            }
+            catch (ArgumentException)
+            {
+                return Results.BadRequest(new { error = "invalid_days" });
+            }
+            catch (KeyNotFoundException)
+            {
+                return Results.NotFound();
+            }
         });
 
         api.MapGet("/properties/{id}/alerts", async (string id, IPropertyStore properties, IAlertStore alerts, CancellationToken ct) =>
@@ -333,13 +352,18 @@ public static partial class Endpoints
             }
 
             await properties.UpsertAsync(
-                new Property(id, update.Name.Trim(), update.MeteringPointId?.Trim() ?? "", update.MonitoringEnabled, Property.DefaultTimeZone, time.GetUtcNow()), ct);
+                new Property(id, update.Name.Trim(), update.MeteringPointId?.Trim() ?? "", update.MonitoringEnabled, Property.DefaultTimeZone, time.GetUtcNow())
+                {
+                    Latitude = update.Latitude,
+                    Longitude = update.Longitude,
+                }, ct);
             return Results.Created($"/api/properties/{id}", new { id });
         });
 
         admin.MapPut("/properties/{id}", async (
             string id, PropertyUpdate update,
-            IPropertyStore properties, IConsumptionStore consumption, IAlertStore alerts, IStateStore state, EnergyMonitor.Web.Pricing.PricingStore pricing, CancellationToken ct) =>
+            IPropertyStore properties, IConsumptionStore consumption, IAlertStore alerts, IStateStore state, EnergyMonitor.Web.Pricing.PricingStore pricing,
+            EnergyMonitor.Web.Weather.WeatherStore weather, CancellationToken ct) =>
         {
             if (await properties.GetAsync(id, ct) is not { } property)
             {
@@ -360,8 +384,18 @@ public static partial class Endpoints
                 await pricing.DeleteAsync(id, ct);
             }
 
+            if (update.Latitude != property.Latitude || update.Longitude != property.Longitude)
+            {
+                // Temperatures of the old position say nothing about the new one; the next sync fetches them again.
+                await weather.DeleteAsync(id, ct);
+            }
+
             await properties.UpsertAsync(
-                property with { Name = update.Name.Trim(), MeteringPointId = meteringPoint, MonitoringEnabled = update.MonitoringEnabled }, ct);
+                property with
+                {
+                    Name = update.Name.Trim(), MeteringPointId = meteringPoint, MonitoringEnabled = update.MonitoringEnabled,
+                    Latitude = update.Latitude, Longitude = update.Longitude,
+                }, ct);
             return Results.NoContent();
         });
 
@@ -422,6 +456,9 @@ public static partial class Endpoints
     private static IResult? Validate(PropertyUpdate update) =>
         string.IsNullOrWhiteSpace(update.Name) || update.Name.Length > 40 ? Results.BadRequest(new { error = "invalid_name" })
         : !string.IsNullOrWhiteSpace(update.MeteringPointId) && !MeteringPointRegex().IsMatch(update.MeteringPointId.Trim()) ? Results.BadRequest(new { error = "invalid_metering_point" })
+        : (update.Latitude is null) != (update.Longitude is null) || update.Latitude is < -90 or > 90 || update.Longitude is < -180 or > 180
+            || update.Latitude is { } latitude && !double.IsFinite(latitude) || update.Longitude is { } longitude && !double.IsFinite(longitude)
+            ? Results.BadRequest(new { error = "invalid_location" })
         : null;
 
     private static string Slug(string name)
@@ -456,7 +493,9 @@ public static partial class Endpoints
         s.DataAgeHours,
         lastSync,
         s.OpenEvents.Count,
-        [.. days.Where(d => d.IsComplete).OrderByDescending(d => d.LocalDate).Take(14).Reverse().Select(ToDto)]);
+        [.. days.Where(d => d.IsComplete).OrderByDescending(d => d.LocalDate).Take(14).Reverse().Select(ToDto)],
+        s.Property.Latitude,
+        s.Property.Longitude);
 
     private static AlertDto ToDto(AlertEvent e, string propertyName) => new(
         e.Id, e.PropertyId, propertyName, e.RuleType.ToString(), e.Severity.ToString(), e.State.ToString(),

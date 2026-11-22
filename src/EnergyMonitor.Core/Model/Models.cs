@@ -12,6 +12,14 @@ public sealed record Property(
     DateTimeOffset CreatedAt)
 {
     public const string DefaultTimeZone = "Europe/Copenhagen";
+
+    /// <summary>
+    /// Where the property is, in decimal degrees; both or neither. Only used to fetch the outdoor
+    /// temperature. Properties with initializers, so a property stored before they existed has none.
+    /// </summary>
+    public double? Latitude { get; init; }
+
+    public double? Longitude { get; init; }
 }
 
 /// <summary>Quality of one source interval. <see cref="Missing"/> and <see cref="Incomplete"/> never carry a usable value.</summary>

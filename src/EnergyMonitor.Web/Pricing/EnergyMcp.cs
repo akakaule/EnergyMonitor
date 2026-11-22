@@ -94,8 +94,11 @@ public static class EnergyMcpSetup
 // Tools with an untyped result return their JSON as text and declare no output schema: the SDK would
 // otherwise announce {"$defs":{"output":true}}, which Claude Code rejects for the whole tool list.
 [McpServerToolType]
-public sealed class EnergyTools(EnergyQueryService queries)
+public sealed class EnergyTools(EnergyQueryService queries, Weather.HeatingQueryService heating)
 {
+    [McpServerTool(Name = "get_heating_analysis", ReadOnly = true, UseStructuredContent = true), Description("How a property's daily electricity use follows the outdoor temperature over the latest days (30-365, default 90). A day's degree-days are how many degrees colder it was outside than inside: against the indoor temperature recorded by a linked heat pump (usesIndoor true), otherwise against baseTemperatureC. 'model' is the fitted line kWh = baseKWhPerDay + kWhPerDegreeDay x degreeDays with rSquared (0-1, how much of the variation the cold explains). Each day has kWh, outdoorC, indoorC, degreeDays and expectedKWh; 'latest' is the newest day. The consumption is the whole metering point's, not the heat pump's alone. Status: Ok, InsufficientData (too few complete days) or NoLocation (the property has no position, so no outdoor temperature).")]
+    public Task<Weather.HeatingView> Heating(string propertyId, int? days, CancellationToken ct) => Safe(() => heating.AnalyseAsync(propertyId, days ?? Weather.HeatingQueryService.DefaultDays, ct));
+
     [McpServerTool(Name = "get_energy_overview", ReadOnly = true), Description("Homes, consumption and costs. Dates YYYY-MM-DD inclusive, maximum 90 days.")]
     public Task<object> Overview(string from, string to, CancellationToken ct) => Safe(() => queries.OverviewAsync(from, to, ct));
 

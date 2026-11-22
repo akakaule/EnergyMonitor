@@ -75,6 +75,14 @@ public sealed class FakeState
 
     public int SpotCalls { get; set; }
 
+    /// <summary>The weather service answers 429, as Open-Meteo does when the free quota is used up.</summary>
+    public bool WeatherDown { get; set; }
+
+    public int WeatherCalls { get; set; }
+
+    /// <summary>What a degree-day costs the summer house in the "heating" scenario, on top of 2 kWh a day.</summary>
+    public const double HeatingKWhPerDegreeDay = 0.55;
+
     public DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(Now(), Zone).DateTime);
 
     public DateOnly LatestAvailable => Today.AddDays(-DelayDays);
@@ -102,6 +110,7 @@ public sealed class FakeState
             SpotTomorrowWithheld = false;
             SpotDayFactors.Clear();
             SpotNegativeDays.Clear();
+            WeatherDown = false;
             Sensibo.Reset();
         }
     }
@@ -155,6 +164,18 @@ public sealed class FakeState
                 case "telegram-up":
                     TelegramDown = false;
                     return true;
+                case "heating":
+                    // The summer house's consumption follows the fake outdoor temperature: 2 kWh a day plus
+                    // 0,55 kWh per degree below 17 °C, with the usual few percent of day-to-day variation.
+                    for (var date = Today.AddDays(-130); date <= Today; date = date.AddDays(1))
+                    {
+                        DayFactors[(Sommerhus, date)] = (2 + (HeatingKWhPerDegreeDay * Math.Max(0, 17 - OutdoorDayMean(date)))) / BaseKWhPerDay[Sommerhus];
+                    }
+
+                    return true;
+                case "weather-down":
+                    WeatherDown = true;
+                    return true;
                 case "cold":
                     Sensibo.Temperature = 3.5;
                     return true;
@@ -171,6 +192,16 @@ public sealed class FakeState
                     return false;
             }
         }
+    }
+
+    /// <summary>The fake outdoor temperature of a day, °C: between 1 and 11, changing slowly from day to day.</summary>
+    public static double OutdoorDayMean(DateOnly date) => 6 + (5 * Math.Sin(date.DayNumber / 9.0));
+
+    /// <summary>The day's mean with an afternoon two degrees warmer and a night two degrees colder.</summary>
+    public double OutdoorC(DateTimeOffset hourUtc)
+    {
+        var local = TimeZoneInfo.ConvertTime(hourUtc, Zone);
+        return Math.Round(OutdoorDayMean(DateOnly.FromDateTime(local.DateTime)) + (2 * Math.Sin((local.Hour - 9) / 24.0 * 2 * Math.PI)), 1);
     }
 
     /// <summary>
@@ -317,6 +348,32 @@ public static class FakeUpstreamsApp
             return Results.Json(new { total = records.Count, records }, new System.Text.Json.JsonSerializerOptions());
         }));
 
+        // Open-Meteo: hourly temperature from past_days back to the end of today (UTC), times as unix seconds.
+        app.MapGet("/v1/forecast", (double latitude, double longitude, int? past_days, FakeState state) => state.Locked(() =>
+        {
+            state.WeatherCalls++;
+            if (state.WeatherDown)
+            {
+                return Results.Json(new { error = true, reason = "Daily API request limit exceeded. Please try again tomorrow." }, statusCode: 429);
+            }
+
+            var today = new DateTimeOffset(state.Now().UtcDateTime.Date, TimeSpan.Zero);
+            var times = new List<long>();
+            var temperatures = new List<double>();
+            for (var t = today.AddDays(-(past_days ?? 0)); t < today.AddDays(1); t = t.AddHours(1))
+            {
+                times.Add(t.ToUnixTimeSeconds());
+                temperatures.Add(state.OutdoorC(t));
+            }
+
+            return Results.Json(new
+            {
+                latitude, longitude, utc_offset_seconds = 0, timezone = "GMT",
+                hourly_units = new { time = "unixtime", temperature_2m = "°C" },
+                hourly = new { time = times, temperature_2m = temperatures },
+            }, new System.Text.Json.JsonSerializerOptions());
+        }));
+
         app.MapFakeSensibo();
 
         app.MapPost("/control/scenario/{name}", (string name, FakeState state) =>
@@ -325,7 +382,7 @@ public static class FakeUpstreamsApp
         app.MapGet("/control/telegram", (FakeState state) => state.Locked(() =>
             Results.Json(state.TelegramMessages.Select(m => new { chatId = m.ChatId, text = m.Text }).ToArray())));
 
-        app.MapGet("/", () => "Fake Eloverblik + Telegram + Sensibo. POST /control/scenario/{normal|low|low2|high|missing|partial|outage|token-expired|telegram-down|telegram-up|cold|offline|sensibo-down|sensibo-key-rejected}, GET /control/telegram");
+        app.MapGet("/", () => "Fake Eloverblik + Telegram + Sensibo. POST /control/scenario/{normal|low|low2|high|missing|partial|outage|token-expired|telegram-down|telegram-up|heating|weather-down|cold|offline|sensibo-down|sensibo-key-rejected}, GET /control/telegram");
     }
 
     private static string? Bearer(HttpRequest request)

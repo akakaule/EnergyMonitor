@@ -113,6 +113,16 @@ builder.Services.AddHttpClient("spotprices", client =>
     client.BaseAddress = new Uri(builder.Configuration["Pricing:BaseUrl"] ?? "https://api.energidataservice.dk/");
     client.Timeout = TimeSpan.FromSeconds(100);
 });
+builder.Services.Configure<EnergyMonitor.Web.Weather.WeatherOptions>(builder.Configuration.GetSection("Weather"));
+builder.Services.AddSingleton<EnergyMonitor.Web.Weather.WeatherStore>();
+builder.Services.AddSingleton<EnergyMonitor.Web.Weather.OpenMeteoClient>();
+builder.Services.AddSingleton<EnergyMonitor.Web.Weather.WeatherSyncService>();
+builder.Services.AddSingleton<EnergyMonitor.Web.Weather.HeatingQueryService>();
+builder.Services.AddHttpClient(EnergyMonitor.Web.Weather.OpenMeteoClient.HttpClientName, client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Weather:BaseUrl"] ?? "https://api.open-meteo.com/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
 builder.AddHeatPump();
 builder.AddEnergyMonitorAuth();
 builder.AddEnergyMcp();

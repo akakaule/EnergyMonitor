@@ -136,6 +136,7 @@ public sealed class AppFactory : WebApplicationFactory<Program>
         builder.UseSetting("Eloverblik:BaseUrl", "http://fake/customerapi/api/");
         builder.UseSetting("Eloverblik:RefreshToken", RefreshToken);
         builder.UseSetting("Pricing:BaseUrl", "http://fake/");
+        builder.UseSetting("Weather:BaseUrl", "http://fake/");
         builder.UseSetting("Telegram:BaseUrl", "http://fake");
         builder.UseSetting("Telegram:BotToken", BotToken);
         builder.UseSetting("Telegram:ChatIds:0", ChatId);
@@ -154,6 +155,7 @@ public sealed class AppFactory : WebApplicationFactory<Program>
             services.AddSingleton<IDelayer>(Delayer);
             services.AddHttpClient(EloverblikClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
             services.AddHttpClient(TelegramChannel.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
+            services.AddHttpClient(EnergyMonitor.Web.Weather.OpenMeteoClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
             services.AddHttpClient("spotprices").ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
             services.AddHttpClient(SensiboClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _fake.GetTestServer().CreateHandler());
         });

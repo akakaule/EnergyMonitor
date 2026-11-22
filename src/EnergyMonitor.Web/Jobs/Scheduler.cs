@@ -153,6 +153,7 @@ public sealed partial class MonitorPipeline(
     SyncService sync,
     EnergyMonitor.Web.Pricing.PriceSyncService prices,
     EnergyMonitor.Web.Pricing.PriceOutlookService outlook,
+    EnergyMonitor.Web.Weather.WeatherSyncService weather,
     AlertService alerts,
     OutboxDispatcher dispatcher,
     ILogger<MonitorPipeline> logger)
@@ -169,6 +170,7 @@ public sealed partial class MonitorPipeline(
         await alerts.EvaluateAsync(ct);
         await dispatcher.DispatchAsync(ct);
         await RunPricesAsync(spotOnly: false, ct);
+        await weather.RunAsync(ct);
         return run;
     }
 
