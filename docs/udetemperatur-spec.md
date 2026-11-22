@@ -1,6 +1,6 @@
 # Forbrug og udetemperatur — specifikation
 
-Status: **implementeret**, 22. november 2026. Kontrolleret med de falske kilder; ikke afprøvet mod det rigtige Open-Meteo (se afsnit 8).
+Status: **implementeret**, 22. november 2026, inklusive alarmer der tager højde for udetemperaturen (afsnit 9). Kontrolleret med de falske kilder; ikke afprøvet mod det rigtige Open-Meteo (se afsnit 8).
 
 ## 1. Overblik
 
@@ -13,6 +13,7 @@ Et sommerhus, der står tomt, bruger næsten kun strøm på varmepumpen, og hvor
 1. **Position på ejendommen** (bredde- og længdegrad) under Indstillinger. Den bruges kun til at hente udetemperaturen.
 2. **Kortet »Forbrug og udetemperatur«** på ejendommens side: hvad en grad koldere koster i kWh pr. døgn, grundforbruget, hvor stor en del af udsvingene kulden forklarer, og seneste døgn sammenlignet med det forventede. Et punktdiagram viser hvert døgn og den forventede linje.
 3. **Et MCP-værktøj**, `get_heating_analysis`, med de samme tal.
+4. **Alarmer for lavt og højt forbrug, der tager højde for kulden** (afsnit 9): en kuldeperiode er ikke længere »højt forbrug«, og en mild uge skjuler ikke et hus, der er holdt op med at varme.
 
 ### Sådan hænger det sammen
 
@@ -44,7 +45,6 @@ Open-Meteo (timetemperatur, 2 m)      Eloverblik (døgnforbrug, findes)      Sen
 
 ### Ikke med i denne omgang
 
-- Alarmer, der tager højde for udetemperaturen. Lavt og højt forbrug sammenlignes stadig med medianen af de seneste 14 døgn.
 - Udetemperatur på varmepumpesiden og i den daglige rapport.
 - Vejr ud over temperatur (vind, sol), som også påvirker varmeforbruget.
 - Opslag af position ud fra adressen.
@@ -120,4 +120,67 @@ Maskinen skal kunne nå `api.open-meteo.com`. Ejendommens position sendes til Op
 
 Status 22. november 2026: 350 backendtest (15 Table Storage-test sprunget over uden Azurite) og 112 frontendtest består. Kortet og indstillingerne er set i en browser mod den kørende løsning med de falske kilder ved 1280 px og 390 px.
 
+Efter afsnit 9: 362 backendtest og 115 frontendtest består.
+
 **Mangler stadig**: et rigtigt svar fra Open-Meteo. Fra udviklingsmiljøet svarede tjenesten kun 429 (dagskvoten for den delte adresse var brugt), så klienten er skrevet efter den dokumenterede svarform og fejlformatet, ikke efter et set svar. Første synkronisering på den rigtige installation viser, om det passer: kortet viser enten tal eller en fejlkode. Om tallene giver mening for sommerhuset, kan først vurderes med rigtige data og nogle ugers indetemperatur.
+
+## 9. Alarmer, der tager højde for udetemperaturen
+
+### Hvad ændres
+
+Reglerne *Lavt forbrug* og *Højt forbrug* sammenlignede hvert døgn med medianen af de foregående 14 komplette døgn. Det giver to fejl i et opvarmet hus:
+
+- En kuldeperiode ligner højt forbrug, selv om huset bare varmer mere.
+- Et hus, der holder op med at varme i frostvejr, kan stadig bruge »det sædvanlige« i forhold til en mild uge, og så kommer der ingen alarm.
+
+Nu sammenlignes døgnet med **det forbrug, dets udetemperatur forklarer**, når det kan beregnes pålideligt. Ellers bruges medianen som før.
+
+| | Før | Nu, når forventningen findes |
+|---|---|---|
+| Sammenlignes med | Median af de foregående 14 døgn | Forventet forbrug ved døgnets udetemperatur |
+| Lavt forbrug | Under 50 % af medianen | Under 50 % af det forventede |
+| Højt forbrug | Over 200 % af medianen | Over 200 % af det forventede |
+| Reglen er slået fra, når | Medianen er under 3 kWh | Det forventede er under 3 kWh |
+| Optrapning, kvittering, lukning, beskeder | Uændret | Uændret |
+
+Procenterne og de 3 kWh er de samme indstillinger som før.
+
+### Hvornår findes en forventning
+
+For hvert døgn, der vurderes, lægges linjen fra afsnit 2 gennem de **foregående** op til 90 døgn. Døgnet selv er aldrig med i sin egen forventning. Forventningen bruges kun, når:
+
+- ejendommen har en position, og der er udetemperatur for hver time i døgnet,
+- linjen bygger på mindst 30 døgn (`Weather:AlarmMinDays`),
+- linjen forklarer mindst halvdelen af udsvingene (`Weather:AlarmMinRSquared`, standard 0,5),
+- koldere døgn faktisk koster mere,
+- døgnet har en indetemperatur, hvis linjen måles mod varmepumpens indetemperatur,
+- reglen har »Tag højde for udetemperaturen« slået til (standard til, også for regler gemt før denne ændring).
+
+Mangler noget af det, vurderes døgnet mod medianen. Det gælder også, når vejrkilden fejler. Et løbende forløb kan derfor have døgn vurderet på hver sin måde; hændelsen viser altid det seneste døgns grundlag.
+
+Udetemperaturen hentes nu **før** reglerne køres, så de nyeste døgn kan vurderes.
+
+### Hvad man ser
+
+- Alarmteksten: `Døgnforbrug 7,0 kWh d. 6/11 er under 50 % af det forventede (16,0 kWh) ved −8,0 °C ude.`
+- Under alarmen: `Målt 7,0 kWh · forventet 16,0 kWh ved −8,0 °C ude · grænse 8,0 kWh` i stedet for medianen. Hændelsen gemmer udetemperaturen (`outdoorC`).
+- Indstillinger: kontakten »Tag højde for udetemperaturen« på de to regler.
+- Kortet »Forbrug og udetemperatur« siger, om sammenhængen er tydelig nok til alarmerne (`dependableForAlarms`).
+
+### Ikke ændret
+
+- Oversigtens »i forhold til median« og den daglige rapports sammenligning er stadig medianen. De kan derfor vise en stor afvigelse et døgn, hvor der med rette ingen alarm er.
+- Døgn, der allerede har en hændelse, vurderes ikke igen.
+
+### Begrænsninger
+
+- En ret linje gennem hele målepunktets forbrug er en grov model. I et beboet hus forklarer kulden ofte under halvdelen af udsvingene, og så bruges medianen fortsat.
+- Flere afvigende døgn i træk indgår i linjen for de følgende døgn og trækker forventningen i deres retning. Med op til 90 døgn i linjen er virkningen lille, men den findes.
+- Tærsklerne (30 døgn, 0,5) er startværdier.
+
+### Test
+
+- Regelmotoren: kuldeperiode uden alarm, mildt døgn uden alarm, normalt udseende døgn der er lavt i kulden, slået fra pr. regel, tilbagefald til median, for lille forventning, løbende forløb på tværs af grundlag.
+- Forventningen: kun foregående døgn, tilbageholdt ved for få døgn, svag sammenhæng eller omvendt hældning, og kræver indetemperatur når linjen bruger den.
+- Hele løsningen med de falske kilder (scenarierne `cold-snap` og `heating`): en kuldeperiode giver alarm mod medianen, men ikke med kendt udetemperatur; et hus, der bruger 40 % af det forventede i kulden, giver alarm med udetemperaturen og ikke mod medianen; slået fra eller fejlende vejrkilde falder tilbage til medianen.
+- Afprøvet i den kørende løsning: ingen alarm for kuldeperioden, og én alarm mod medianen, når kontakten slås fra på reglen.

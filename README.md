@@ -72,6 +72,7 @@ curl -X POST http://localhost:5099/control/scenario/low            # summer hous
 curl -X POST http://localhost:5099/control/scenario/missing        # summer house: no data for the last 5 days
 curl -X POST http://localhost:5099/control/scenario/outage         # Eloverblik answers 503
 curl -X POST http://localhost:5099/control/scenario/telegram-down  # Telegram fails; messages stay queued
+curl -X POST http://localhost:5099/control/scenario/cold-snap      # the latest day was 25 degrees below zero (run before "heating")
 curl -X POST http://localhost:5099/control/scenario/heating        # summer house: consumption follows the fake outdoor temperature
 curl -X POST http://localhost:5099/control/scenario/weather-down   # the weather service answers 429
 curl -X POST http://localhost:5099/control/scenario/cold           # heat pump: 3,5 °C indoors (frost alarm)
@@ -96,8 +97,8 @@ For frontend work, `npm run dev` in `src/frontend` proxies `/api` to the running
 ```sh
 docker run -d --rm -p 10002:10002 mcr.microsoft.com/azure-storage/azurite \
   azurite-table --tableHost 0.0.0.0 --inMemoryPersistence --skipApiVersionCheck
-dotnet test --project tests/EnergyMonitor.Tests     # 350 tests; the 15 Table Storage ones are skipped without Azurite
-cd src/frontend && npm run lint && npm test         # ESLint and 112 component/format tests
+dotnet test --project tests/EnergyMonitor.Tests     # 362 tests; the 15 Table Storage ones are skipped without Azurite
+cd src/frontend && npm run lint && npm test         # ESLint and 115 component/format tests
 ```
 
 The pipeline tests run the real application in-process with a controllable clock, wired to the fake upstreams.
@@ -119,6 +120,7 @@ The pipeline tests run the real application in-process with a controllable clock
 | `Pricing:WindowHours` | Length of the cheapest and the most expensive period of a day, default 3 (1–6) | App settings |
 | `Pricing:NotifyDeviationPercent`, `Pricing:NotifyHighPrice` | When tomorrow's prices are worth a Telegram message: an average this far from the latest days' (default 25 %), or an hour at this price or more (default 4.00 DKK/kWh incl. VAT). 0 turns either off | App settings |
 | `Weather:BaseUrl`, `Weather:PastDays`, `Weather:BaseTemperatureC` | The outdoor temperature source (default Open-Meteo), how far back each fetch reaches (default and maximum 92 days), and the indoor temperature assumed for a property without a recorded one (default 17) | App settings |
+| `Weather:AlarmMinDays`, `Weather:AlarmMinRSquared`, `Weather:AlarmLookbackDays` | When the consumption alarms judge a day by its outdoor temperature: the line through the preceding days (default up to 90) must cover this many days (default 30) and explain this share of their variation (default 0.5) | App settings |
 | `Sync:BackfillDays`, `Sync:RefetchDays` | Default 90 and 7 | App settings |
 | `ConnectionStrings:tables` | Table endpoint (managed identity) or an Azurite connection string | Bicep / Aspire |
 | `KeyVault:Uri` | When set, secrets are read from this vault and re-read every 30 minutes | Bicep |
@@ -145,14 +147,15 @@ The electricity rules are evaluated only on complete Danish calendar days; the h
 
 | Rule | Default | Result |
 |---|---|---|
-| Low consumption | Below 50 % of the median of the 14 preceding complete days, median at least 3 kWh, monitoring *Aktiv* | `Observer` on the first day, `Alarm` from the second consecutive day |
-| High consumption | Above 200 % of that median, median at least 3 kWh | `Observer` |
+| Low consumption | Below 50 % of the median of the 14 preceding complete days, median at least 3 kWh, monitoring *Aktiv*. With a known outdoor temperature: below 50 % of the consumption expected for it (see below) | `Observer` on the first day, `Alarm` from the second consecutive day |
+| High consumption | Above 200 % of that median, median at least 3 kWh. With a known outdoor temperature: above 200 % of the expected consumption | `Observer` |
 | Missing data | No new complete day for 72 hours | `Data mangler` (not a consumption alarm) |
 | Source failure | 3 consecutive failed syncs, or a rejected or expired token | Technical alarm |
 | Indoor too cold (heat pump) | Latest indoor temperature below 5 °C | `Observer`, then `Alarm` after 120 minutes; closes at 6 °C |
 | Heat pump offline | Not seen by Sensibo for more than 60 minutes | `Alarm` |
 | Sensibo failure | 3 consecutive failed collections, or a rejected API key | Technical alarm |
 
+- **Outdoor temperature**: for a property with a position, a day is compared with the consumption its outdoor temperature explains instead of the median, so a cold snap is not "high" and a mild week does not hide a house that has stopped heating. This needs a line through at least 30 of the preceding 90 days that explains at least half of their variation (`Weather:AlarmMinDays`, `Weather:AlarmMinRSquared`); otherwise, and when the weather source fails, the median is used. Each of the two rules can turn it off (*Tag højde for udetemperaturen*). See the [specification](docs/udetemperatur-spec.md#9-alarmer-der-tager-højde-for-udetemperaturen).
 - The median excludes the analysed day and needs at least 7 complete days; until then the dashboard shows *Utilstrækkelig historik* and the relative rules are off.
 - An event is unique on (property, rule, first affected day). Repeated syncs and restarts cannot duplicate it, and a closed event is never reopened for the same day. A heat pump rule that clears and triggers again on the same day raises a second event (`…~2026-11-14~1`), so a second cold spell is never silent.
 - The observed value, median, threshold and rule parameters are stored with the event as a snapshot.
@@ -287,7 +290,7 @@ For a property with a position (latitude and longitude under Indstillinger → t
 - The consumption is the whole metering point's, not the heat pump's alone; everything else ends up in the base load.
 - A failing weather source is shown on the card as a code. It never fails the sync, raises no alarm and sends no message.
 - `GET /api/properties/{id}/heating?days=90` and the MCP tool `get_heating_analysis` return the same data.
-- The alarm rules do not use the outdoor temperature yet.
+- The low and high consumption alarms judge a day by its outdoor temperature when the line is dependable enough (see [Alarm rules](#alarm-rules)); the card says whether it is.
 - Not verified against the live Open-Meteo: from the development environment it only answered 429 (quota used up for the shared address).
 
 ## Later: Home Assistant
