@@ -27,6 +27,9 @@ public sealed class FakeSensibo
     /// <summary>Every call answers 401, as for a revoked key.</summary>
     public bool KeyRejected { get; set; }
 
+    /// <summary>Every call answers 200 with an HTML page, as a captive portal or a broken proxy would.</summary>
+    public bool AnswersHtml { get; set; }
+
     public JsonObject AcState { get; private set; } = DefaultAcState();
 
     public JsonObject? Timer { get; set; }
@@ -48,6 +51,7 @@ public sealed class FakeSensibo
         Online = true;
         Down = false;
         KeyRejected = false;
+        AnswersHtml = false;
         AcState = DefaultAcState();
         Timer = null;
         SmartModeEnabled = false;
@@ -207,6 +211,11 @@ public static class FakeSensiboApp
         if (fake.Down)
         {
             return Results.StatusCode(503);
+        }
+
+        if (fake.AnswersHtml)
+        {
+            return Results.Content("<script>alert(document.cookie)</script>", "text/html");
         }
 
         if (fake.KeyRejected || request.Query["apiKey"] != FakeSensibo.ApiKey)

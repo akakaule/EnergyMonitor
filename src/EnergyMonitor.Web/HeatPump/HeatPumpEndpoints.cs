@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -201,8 +202,18 @@ public static partial class HeatPumpEndpoints
                 return;
             }
 
-            using var reader = new StreamReader(request.Body, Encoding.UTF8);
-            upstreamRequest.Content = new StringContent(await reader.ReadToEndAsync(context.RequestAborted), Encoding.UTF8, "application/json");
+            // Only well-formed JSON is passed on, never arbitrary text.
+            using var buffer = new MemoryStream();
+            await request.Body.CopyToAsync(buffer, context.RequestAborted);
+            var json = buffer.ToArray();
+            if (!IsJson(json))
+            {
+                await Fail(response, StatusCodes.Status400BadRequest, "invalid_json");
+                return;
+            }
+
+            upstreamRequest.Content = new ByteArrayContent(json);
+            upstreamRequest.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         }
 
         HttpResponseMessage upstream;
@@ -246,9 +257,32 @@ public static partial class HeatPumpEndpoints
                 return;
             }
 
+            // Sensibo answers JSON. Anything else (an HTML error page from a proxy in front of it, say) is not passed
+            // on, and the type is always set here rather than copied, so an answer can never render as a page of the app.
+            if (upstream.Content.Headers.ContentType?.MediaType is not { } type
+                || !(type.Equals("application/json", StringComparison.OrdinalIgnoreCase) || type.EndsWith("+json", StringComparison.OrdinalIgnoreCase))
+                || !IsJson(body))
+            {
+                await Fail(response, StatusCodes.Status502BadGateway, SensiboException.Error);
+                return;
+            }
+
             response.StatusCode = (int)upstream.StatusCode;
-            response.ContentType = upstream.Content.Headers.ContentType?.ToString();
+            response.ContentType = "application/json; charset=utf-8";
             await response.Body.WriteAsync(body, context.RequestAborted);
+        }
+    }
+
+    private static bool IsJson(byte[] utf8)
+    {
+        try
+        {
+            using var _ = JsonDocument.Parse(utf8);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

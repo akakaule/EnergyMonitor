@@ -343,6 +343,34 @@ public class HeatPumpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Proxy_Writes_MustBeWellFormedJson()
+    {
+        using var admin = _app.ClientFor(AppFactory.Admin);
+
+        var response = await admin.PostAsync(AcStates, new StringContent("<script>alert(1)</script>", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("invalid_json", (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
+        Assert.Empty(_app.Fake.Locked(() => _app.Fake.Sensibo.Queries.ToList()));
+    }
+
+    [Fact]
+    public async Task Proxy_AnswersOnlyJson_EvenWhenSensiboSendsAPage()
+    {
+        using var viewer = _app.ClientFor(AppFactory.Viewer);
+
+        var ok = await viewer.GetAsync(Pods);
+        Assert.Equal("application/json", ok.Content.Headers.ContentType?.MediaType);
+
+        _app.Fake.Locked(() => _app.Fake.Sensibo.AnswersHtml = true);
+        var response = await viewer.GetAsync(Pods);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain("<script>", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Proxy_IsRateLimitedPerUser()
     {
         using var app = new AppFactory(heatpump: true);
