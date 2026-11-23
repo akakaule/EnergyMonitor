@@ -1,8 +1,13 @@
 name: CodeQL
 
-# Manual only: code scanning is not enabled for this private repository, so uploading results fails.
-# Restore the push, pull_request and schedule triggers if GitHub Code Security is enabled later.
+# Code scanning is free for a public repository. If the repository is made private again without GitHub Code
+# Security, uploading the results fails: then keep only workflow_dispatch.
 on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 4 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -28,7 +33,9 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.language == 'csharp' && 'manual' || 'none' }}
+      # Only what ships: the app with Core and ServiceDefaults. The tests and the fake upstreams they run against
+      # (and the AppHost that starts those locally) are left out; paths-ignore has no effect on a compiled build.
       - name: Build
         if: matrix.language == 'csharp'
-        run: dotnet build EnergyMonitor.slnx -c Release
+        run: dotnet build src/EnergyMonitor.Web/EnergyMonitor.Web.csproj -c Release
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
