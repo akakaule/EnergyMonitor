@@ -7,7 +7,7 @@ var tables = builder.AddAzureStorage("storage")
     .RunAsEmulator(emulator => emulator.WithLifetime(ContainerLifetime.Persistent))
     .AddTables("tables");
 
-var web = builder.AddProject<Projects.EnergyMonitor_Web>("energymonitor")
+var web = builder.AddDotnetProject("energymonitor", "../EnergyMonitor.Web/EnergyMonitor.Web.csproj")
     .WithReference(tables)
     .WaitFor(tables)
     .WithHttpHealthCheck("/health")
@@ -15,7 +15,7 @@ var web = builder.AddProject<Projects.EnergyMonitor_Web>("energymonitor")
 
 if (!string.Equals(builder.Configuration["UseRealUpstreams"], "true", StringComparison.OrdinalIgnoreCase))
 {
-    var fake = builder.AddProject<Projects.EnergyMonitor_FakeUpstreams>("fake-upstreams");
+    var fake = builder.AddDotnetProject("fake-upstreams", "../../tests/EnergyMonitor.FakeUpstreams/EnergyMonitor.FakeUpstreams.csproj");
     var fakeUrl = fake.GetEndpoint("http");
     web.WaitFor(fake)
         .WithEnvironment("Eloverblik__BaseUrl", ReferenceExpression.Create($"{fakeUrl}/customerapi/api/"))

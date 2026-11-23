@@ -9,7 +9,7 @@ COPY src/frontend/ ./
 RUN npm run build
 
 # 2. The .NET host.
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /repo
 COPY global.json NuGet.config Directory.Build.props Directory.Packages.props ./
 COPY src/EnergyMonitor.Core/EnergyMonitor.Core.csproj src/EnergyMonitor.Core/
@@ -23,7 +23,7 @@ COPY --from=frontend /repo/src/EnergyMonitor.Web/wwwroot/ src/EnergyMonitor.Web/
 RUN dotnet publish src/EnergyMonitor.Web/EnergyMonitor.Web.csproj -c Release -o /app --no-restore
 
 # 3. Runtime. The app needs time zone data (Europe/Copenhagen) and runs as the image's non-root user.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
+FROM mcr.microsoft.com/dotnet/aspnet:11.0
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app ./

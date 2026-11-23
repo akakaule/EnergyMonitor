@@ -12,7 +12,7 @@ Eloverblik Customer API        Telegram Bot API        Sensibo API
           ▲                           ▲                      ▲
           │                           │                      │
    ┌──────┴───────────────────────────┴──────────────────────┴──┐
-   │ EnergyMonitor.Web (.NET 10, one container)                  │
+   │ EnergyMonitor.Web (.NET 11, one container)                  │
    │  · background scheduler: sync 08:00/17:00, prices 13:30,    │
    │    report 09:00 (Danish time), heat pump every 15 minutes   │
    │  · rule engine and notification outbox                      │
@@ -38,7 +38,7 @@ Eloverblik Customer API        Telegram Bot API        Sensibo API
 
 | Specification | This implementation | Why |
 |---|---|---|
-| .NET 8 isolated Azure Functions | .NET 10 ASP.NET Core app with a `BackgroundService`, hosted in Azure Container Apps | Requested when implementation started. .NET 8 left support in November 2026. |
+| .NET 8 isolated Azure Functions | .NET 11 ASP.NET Core app with a `BackgroundService`, hosted in Azure Container Apps | Requested when implementation started. .NET 8 left support in November 2026. |
 | React PWA on Azure Static Web Apps | The PWA is served by the same container as the API | With one always-on container there is no reason for a second host. Same origin means no CORS and no tokens in the browser: sign-in is a server-side cookie. |
 | Timer-triggered functions | One scheduler loop that claims each slot in Table Storage before running it | Gives the same schedule, survives restarts without repeating or losing a slot. Requires exactly one replica, which the Bicep enforces. |
 | `User` table | The allowlist is configuration (`Auth:Users`), not a table | Two users; configuration cannot go stale or be edited through the app. |
@@ -56,7 +56,7 @@ Other choices worth knowing:
 
 ## Run locally
 
-Requires the .NET 10 SDK, Node 24+, Docker (for Azurite) and the [Aspire CLI](https://aspire.dev).
+Requires the .NET 11 SDK, Node 24+, Docker (for Azurite) and the [Aspire CLI](https://aspire.dev).
 
 ```sh
 cd src/frontend && npm ci && npm run build && cd ../..   # builds the PWA into the web project

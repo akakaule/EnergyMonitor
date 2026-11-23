@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.6.5">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -7,12 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\EnergyMonitor.Web\EnergyMonitor.Web.csproj" />
-    <ProjectReference Include="..\..\tests\EnergyMonitor.FakeUpstreams\EnergyMonitor.FakeUpstreams.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" />
     <PackageReference Include="Aspire.Hosting.Azure.Storage" />
+    <PackageReference Include="Aspire.Hosting.Dotnet" />
   </ItemGroup>
 
 </Project>
